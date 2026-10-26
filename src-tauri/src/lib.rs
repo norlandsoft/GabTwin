@@ -116,9 +116,17 @@ impl TtsState {
 }
 
 fn tts_model_dir() -> PathBuf {
-    std::env::var_os("GABTWIN_TTS_MODEL_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| gabtwin_home().join("models").join("matcha-zh-en"))
+    if let Some(dir) = std::env::var_os("GABTWIN_TTS_MODEL_DIR") {
+        return PathBuf::from(dir);
+    }
+    // 有参考音就优先用 ZipVoice 克隆音色，否则用 Matcha。
+    let home = gabtwin_home();
+    let zipvoice = home.join("models").join("zipvoice-zh-en");
+    if zipvoice.is_dir() && home.join("tts/reference.wav").is_file() {
+        zipvoice
+    } else {
+        home.join("models").join("matcha-zh-en")
+    }
 }
 
 fn start_tts_worker(

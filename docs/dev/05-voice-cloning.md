@@ -31,6 +31,12 @@ curl -L -o vocos_24khz.onnx \
 
 （tar 解压后放进上面的目录，声码器也放同一层。）
 
+## 当前状态（本机）
+
+- 参考音：`$GABTWIN_HOME/tts/reference.wav`（talk.mp3 开头 6 秒），文字在同目录 `reference.txt`；
+- 有参考音时应用**自动优先用 ZipVoice**，否则回退 Matcha；
+- 实测首音 **3.1 s**，长句 RTF 0.6–1.0（随机器负载波动）。
+
 ## 用法
 
 ```bash
