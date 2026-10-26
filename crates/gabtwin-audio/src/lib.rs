@@ -252,6 +252,8 @@ pub enum SpeakerCommand {
 pub struct SpeakerHandle {
     tx: mpsc::Sender<SpeakerCommand>,
     pub sample_rate: u32,
+    /// 输出设备是耳机/耳麦时，回声很小，可以边播边听、支持插话。
+    pub headphones: bool,
 }
 
 impl SpeakerHandle {
@@ -270,8 +272,8 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
     std::thread::spawn(move || {
         let buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         match build_output_stream(buffer.clone()) {
-            Ok((stream, rate)) => {
-                let _ = ready_tx.send(Ok(rate));
+            Ok((stream, rate, headphones)) => {
+                let _ = ready_tx.send(Ok((rate, headphones)));
                 while let Ok(command) = rx.recv() {
                     match command {
                         SpeakerCommand::Play(samples) => {
@@ -296,9 +298,10 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
     });
 
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(rate)) => Ok(SpeakerHandle {
+        Ok(Ok((rate, headphones))) => Ok(SpeakerHandle {
             tx,
             sample_rate: rate,
+            headphones,
         }),
         Ok(Err(message)) => Err(anyhow!(message)),
         Err(_) => Err(anyhow!("启动音频输出超时")),
@@ -307,7 +310,7 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
 
 fn build_output_stream(
     buffer: Arc<Mutex<VecDeque<f32>>>,
-) -> Result<(cpal::Stream, u32), anyhow::Error> {
+) -> Result<(cpal::Stream, u32, bool), anyhow::Error> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -317,6 +320,18 @@ fn build_output_stream(
         .context("读取默认输出配置失败")?;
     let sample_format = supported.sample_format();
     let config: cpal::StreamConfig = supported.config();
+    let headphones = device
+        .description()
+        .map(|d| {
+            matches!(
+                d.device_type(),
+                cpal::DeviceType::Headphones
+                    | cpal::DeviceType::Headset
+                    | cpal::DeviceType::Earpiece
+                    | cpal::DeviceType::HearingAid
+            )
+        })
+        .unwrap_or(false);
     let channels = config.channels as usize;
     let rate = config.sample_rate;
     let err_fn = |err| eprintln!("[audio] 输出流错误：{err}");
@@ -352,7 +367,7 @@ fn build_output_stream(
         other => bail!("暂不支持的输出采样格式 {other:?}"),
     };
     stream.play()?;
-    Ok((stream, rate))
+    Ok((stream, rate, headphones))
 }
 
 fn pop_samples(buffer: &Arc<Mutex<VecDeque<f32>>>, frames: usize) -> Option<Vec<f32>> {

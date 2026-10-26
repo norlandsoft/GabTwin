@@ -13,15 +13,20 @@ pub struct TtsConfig {
     pub num_threads: i32,
     pub speaker_id: i32,
     pub speed: f32,
+    /// onnxruntime provider：cpu / coreml（macOS）
+    pub provider: String,
+    pub debug: bool,
 }
 
 impl TtsConfig {
     pub fn new(model_dir: impl Into<PathBuf>) -> Self {
         Self {
             model_dir: model_dir.into(),
-            num_threads: 4,
+            num_threads: 8,
             speaker_id: 0,
             speed: 1.0,
+            provider: "cpu".to_string(),
+            debug: false,
         }
     }
 }
@@ -31,40 +36,110 @@ pub struct Tts {
     cfg: TtsConfig,
 }
 
+/// 找 `<prefix>*.onnx`，有 int8 优先。
+fn pick_onnx(dir: &std::path::Path, prefix: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("onnx"))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(prefix))
+                .unwrap_or(false)
+        })
+        .collect();
+    candidates.sort();
+    candidates
+        .iter()
+        .find(|path| path.to_string_lossy().contains(".int8."))
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+}
+
 impl Tts {
     pub fn new(cfg: &TtsConfig) -> Result<Self> {
         let dir = &cfg.model_dir;
-        let model = dir.join("model.onnx");
-        let lexicon = dir.join("lexicon.txt");
         let tokens = dir.join("tokens.txt");
-        for (path, hint) in [
-            (&model, "model.onnx"),
-            (&lexicon, "lexicon.txt"),
-            (&tokens, "tokens.txt"),
-        ] {
-            if !path.is_file() {
-                bail!(
-                    "TTS 模型文件缺失：{}\n提示：需要 {hint}（见 docs/dev/04-tts.md）",
-                    path.display()
-                );
-            }
+        if !tokens.is_file() {
+            bail!("TTS 模型文件缺失：{}（需要 tokens.txt）", tokens.display());
         }
 
         let mut config = OfflineTtsConfig::default();
-        config.model.vits.model = Some(model.display().to_string());
-        config.model.vits.lexicon = Some(lexicon.display().to_string());
-        config.model.vits.tokens = Some(tokens.display().to_string());
         config.model.num_threads = cfg.num_threads;
-        config.model.provider = Some("cpu".to_string());
+        config.model.provider = Some(cfg.provider.clone());
+        config.model.debug = cfg.debug;
         config.max_num_sentences = 2;
 
+        if let Some(acoustic) = pick_onnx(dir, "model-steps") {
+            // Matcha（中英，16 kHz，配 vocos 声码器；非自回归，快）
+            let vocoder = pick_onnx(dir, "vocos")
+                .or_else(|| pick_onnx(dir, "vocoder"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Matcha 需要声码器 vocos-16khz-univ.onnx（{}）",
+                        dir.display()
+                    )
+                })?;
+            let lexicon = dir.join("lexicon.txt");
+            config.model.matcha.acoustic_model = Some(acoustic.display().to_string());
+            config.model.matcha.vocoder = Some(vocoder.display().to_string());
+            if lexicon.is_file() {
+                config.model.matcha.lexicon = Some(lexicon.display().to_string());
+            }
+            config.model.matcha.tokens = Some(tokens.display().to_string());
+        } else if dir.join("voices.bin").is_file() {
+            // Kokoro（24 kHz 多语，中文音色从 sid 3 开始）
+            let model = pick_onnx(dir, "model")
+                .ok_or_else(|| anyhow::anyhow!("Kokoro 需要 model*.onnx（{}）", dir.display()))?;
+            let voices = dir.join("voices.bin");
+            config.model.kokoro.model = Some(model.display().to_string());
+            config.model.kokoro.voices = Some(voices.display().to_string());
+            config.model.kokoro.tokens = Some(tokens.display().to_string());
+            let lexicons: Vec<String> = ["lexicon-zh.txt", "lexicon-us-en.txt"]
+                .iter()
+                .map(|name| dir.join(name))
+                .filter(|path| path.is_file())
+                .map(|path| path.display().to_string())
+                .collect();
+            if !lexicons.is_empty() {
+                config.model.kokoro.lexicon = Some(lexicons.join(","));
+            }
+            config.model.kokoro.lang = Some("zh".to_string());
+        } else {
+            // VITS（16 kHz 单音色）
+            let model = dir.join("model.onnx");
+            let lexicon = dir.join("lexicon.txt");
+            for (path, hint) in [(&model, "model.onnx"), (&lexicon, "lexicon.txt")] {
+                if !path.is_file() {
+                    bail!(
+                        "TTS 模型文件缺失：{}\n提示：需要 {hint}（见 docs/dev/04-tts.md）",
+                        path.display()
+                    );
+                }
+            }
+            config.model.vits.model = Some(model.display().to_string());
+            config.model.vits.lexicon = Some(lexicon.display().to_string());
+            config.model.vits.tokens = Some(tokens.display().to_string());
+        }
+
         // 数字、日期、多音字规则；有就挂上。
-        let fsts: Vec<String> = ["date.fst", "number.fst", "phone.fst", "new_heteronym.fst"]
-            .iter()
-            .map(|name| dir.join(name))
-            .filter(|path| path.is_file())
-            .map(|path| path.display().to_string())
-            .collect();
+        let fsts: Vec<String> = [
+            "date.fst",
+            "date-zh.fst",
+            "number.fst",
+            "number-zh.fst",
+            "phone.fst",
+            "phone-zh.fst",
+            "new_heteronym.fst",
+        ]
+        .iter()
+        .map(|name| dir.join(name))
+        .filter(|path| path.is_file())
+        .map(|path| path.display().to_string())
+        .collect();
         if !fsts.is_empty() {
             config.rule_fsts = Some(fsts.join(","));
         }

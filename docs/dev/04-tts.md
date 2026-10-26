@@ -56,11 +56,41 @@ cargo run -p gabtwin-probe -- --tts "$HOME/Library/Application Support/GabTwin/m
 afplay /tmp/tts.wav
 ```
 
+## 音色候选（2026-10-26 实测）
+
+同一句话 "你好，我是你的数字伙伴。今天想聊点什么？"：
+
+| 引擎 | 采样率 | 合成耗时 | RTF | 说明 |
+|---|---|---|---|---|
+| VITS zh-ll（当前默认） | 16 kHz | 780 ms | 0.27 | 快，但音色偏机械 |
+| Matcha zh-en | 16 kHz | 120–340 ms | 0.04–0.11 | 很快，中英混读；音色待你听 |
+| Kokoro v1.1（sid 3） | 24 kHz | 3.7–4.0 s | ≈1.0 | 更自然，但**无法实时流式**，未采用 |
+
+试听：
+
+```bash
+afplay /tmp/tts-vits-sample.wav     # VITS
+afplay /tmp/matcha-sample.wav       # Matcha
+afplay /tmp/kokoro-3.wav            # Kokoro
+```
+
+`Matcha` 的模型在 `~/Library/Application Support/GabTwin/models/matcha-zh-en/`；
+它的声码器 `vocos-16khz-univ.onnx` 要从 GitHub release 单独下（下载慢，已在本机）。
+选定后把 `GABTWIN_TTS_MODEL_DIR` 指过去即可，应用会自动识别 VITS / Matcha / Kokoro。
+
+## 插话（barge-in）
+
+- **耳机**：输出设备被识别为 Headphones/Headset 时，播放期间**不闭麦**；
+  一旦识别到你开口（partial），立即停止播放、取消这一轮回复，你的话进入新一轮。
+- **外放**：仍是半双工。麦克风会收到 TTS 自己的声音，没有 AEC 时任何"插话检测"都会
+  被自己的回声触发。要真正外放插话，需要 AEC（WebRTC APM 或 macOS VPIO），是下一步。
+- 任何情况下都可以点「停止」立即静音。
+
 ## 已知限制
 
 1. **英文/生词会被跳过**：中文 lexicon 里没有的词（GabTwin、API、bug）直接忽略，不会念。
 2. **只有一个人声音色**；3 个角色各自的声音还没做。
-3. **说话时听不见你**：半双工，想打断只能点停止或等它说完（M2 AEC 之后再做真打断）。
+3. **外放时听不见你**：半双工；戴耳机可以直接插话（见上）。外放插话要等 AEC。
 4. **没有口型**：viseme 时间轴还没接（M3）。
 5. 首句可能在短语中间断开（"对我做了介绍" / "啊，那么…"），听感上是一个短停顿。
 6. 输出设备固定为系统默认，不能选。

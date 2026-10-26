@@ -31,7 +31,7 @@ GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
-MODELS="zipformer-zh small-ctc bilingual multilingual paraformer sensevoice tts"
+MODELS="zipformer-zh small-ctc bilingual multilingual paraformer sensevoice tts kokoro-zh"
 
 repo_of() {
   case "$1" in
@@ -42,6 +42,7 @@ repo_of() {
     paraformer) echo "csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en" ;;
     sensevoice) echo "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
     tts) echo "csukuangfj/sherpa-onnx-vits-zh-ll" ;;
+    kokoro-zh) echo "csukuangfj/kokoro-int8-multi-lang-v1_1" ;;
     *) return 1 ;;
   esac
 }
@@ -55,6 +56,7 @@ dir_of() {
     paraformer) echo "streaming-paraformer-bilingual-zh-en" ;;
     sensevoice) echo "sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
     tts) echo "vits-zh-ll" ;;
+    kokoro-zh) echo "kokoro-int8-multi-lang-v1_1" ;;
   esac
 }
 
@@ -83,6 +85,18 @@ decoder-epoch-99-avg-1.int8.onnx:1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992
 joiner-epoch-99-avg-1.int8.onnx:1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0
 tokens.txt:a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3
 bpe.model:bcae393dbc5611be5ffa4c7ae0841558978a5a4f484008cb9dff3a2cc97ebe01
+EOF
+      ;;
+    kokoro-zh)
+      cat <<'EOF'
+model.int8.onnx:05d793700b0b507f760c183c0e39bdd6a97b43d32fdc7bf7b54a5179f1b11222
+voices.bin:e64a5a581d8c2a350d848f51c3121657cd83aa07ed6109172177345874a7244c
+tokens.txt:931ab2df2400cd65d580a22402024c2347ced8ae9ea300e545144b1aacc48e14
+lexicon-zh.txt:fea060803db3e59193987f1a3436f56917bda09f3b3595b6588e46ae60cebf93
+lexicon-us-en.txt:7daaab53a181be9885b853a8582bf1838186317e5dadacbcef9c426d6fa0da14
+date-zh.fst:eb8aa079ae3cb81d8f4404992f39d61a0cb990947512b5b8d1e54d1f6980e718
+number-zh.fst:743f402181fcfebf76cc2f0546b71fa26476e626fbe4e460fb7b4c3a7a8bd5bd
+phone-zh.fst:1ac2b6fa56b1442320c4de7db08353bab8963a2b57f365eebcdd3a2d3562f8d7
 EOF
       ;;
     tts)
@@ -262,7 +276,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
-    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer|sensevoice|tts) TARGET="$1"; shift ;;
+    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer|sensevoice|tts|kokoro-zh) TARGET="$1"; shift ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done

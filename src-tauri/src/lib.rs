@@ -48,6 +48,10 @@ struct TtsState {
     turn_started: Arc<Mutex<Option<Instant>>>,
     /// 播放期间置位，会话层据此屏蔽麦克风输入。
     mute: Arc<AtomicBool>,
+    /// 输出是不是耳机（耳机回声小，可以边播边听、支持插话）。
+    headphones: Arc<AtomicBool>,
+    /// 当前是否正在播放，用于耳机下的插话检测。
+    speaking: Arc<AtomicBool>,
 }
 
 impl TtsState {
@@ -55,13 +59,24 @@ impl TtsState {
         let generation = Arc::new(AtomicU64::new(0));
         let turn_started = Arc::new(Mutex::new(None));
         let mute = Arc::new(AtomicBool::new(false));
-        let tx = start_tts_worker(app, generation.clone(), turn_started.clone(), mute.clone());
+        let headphones = Arc::new(AtomicBool::new(false));
+        let speaking = Arc::new(AtomicBool::new(false));
+        let tx = start_tts_worker(
+            app,
+            generation.clone(),
+            turn_started.clone(),
+            mute.clone(),
+            headphones.clone(),
+            speaking.clone(),
+        );
         Self {
             tx: Mutex::new(Some(tx)),
             generation,
             splitter: Mutex::new(ClauseSplitter::new()),
             turn_started,
             mute,
+            headphones,
+            speaking,
         }
     }
 
@@ -111,6 +126,8 @@ fn start_tts_worker(
     generation: Arc<AtomicU64>,
     turn_started: Arc<Mutex<Option<Instant>>>,
     mute: Arc<AtomicBool>,
+    headphones: Arc<AtomicBool>,
+    speaking: Arc<AtomicBool>,
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -147,10 +164,16 @@ fn start_tts_worker(
                 return;
             }
         };
+        headphones.store(speaker.headphones, Ordering::SeqCst);
         log(format!(
-            "音频输出：{} Hz（TTS {} Hz，线性重采样）",
+            "音频输出：{} Hz（TTS {} Hz，线性重采样），{}",
             speaker.sample_rate,
-            tts.sample_rate()
+            tts.sample_rate(),
+            if speaker.headphones {
+                "耳机：可直接插话"
+            } else {
+                "外放：播放时半双工"
+            }
         ));
 
         let mut started = false;
@@ -164,6 +187,7 @@ fn start_tts_worker(
                     queued_ms = 0;
                     first_push_at = None;
                     mute.store(false, Ordering::SeqCst);
+                    speaking.store(false, Ordering::SeqCst);
                 }
                 TtsCommand::Flush => {
                     // 合成期间已经在播的部分要扣掉，否则声音结束后还会多静音一段。
@@ -177,9 +201,11 @@ fn start_tts_worker(
                         serde_json::json!({ "duration_ms": remaining }),
                     );
                     let flag = mute.clone();
+                    let playing = speaking.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(remaining + 250));
                         flag.store(false, Ordering::SeqCst);
+                        playing.store(false, Ordering::SeqCst);
                         log("TTS 结束：恢复麦克风");
                     });
                     queued_ms = 0;
@@ -216,6 +242,7 @@ fn start_tts_worker(
                     if first_push_at.is_none() {
                         first_push_at = Some(Instant::now());
                     }
+                    speaking.store(true, Ordering::SeqCst);
                     if !mute.swap(true, Ordering::SeqCst) {
                         log("TTS 播放：屏蔽麦克风");
                     }
@@ -340,7 +367,10 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
 
     let mut cfg = SessionConfig::new(model_dir());
     if let Some(tts) = app.try_state::<TtsState>() {
-        cfg.mute = Some(tts.mute.clone());
+        // 耳机：不闭麦，靠插话检测；外放：播放期间半双工。
+        if !tts.headphones.load(Ordering::SeqCst) {
+            cfg.mute = Some(tts.mute.clone());
+        }
     }
     if let Ok(device) = std::env::var("GABTWIN_DEVICE") {
         if !device.is_empty() {
@@ -380,6 +410,18 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             log(format!("{event:?}"));
             if let Err(err) = emit_target.emit("session-event", &event) {
                 log(format!("emit 失败：{err}"));
+            }
+            if let SessionEvent::Partial { .. } = &event {
+                if let Some(tts) = llm_app.try_state::<TtsState>() {
+                    if tts.speaking.load(Ordering::SeqCst) && tts.headphones.load(Ordering::SeqCst)
+                    {
+                        tts.stop();
+                        if let Some(llm) = llm_app.try_state::<LlmState>() {
+                            llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+                        }
+                        log("检测到插话：停止播放并取消回复");
+                    }
+                }
             }
             if let SessionEvent::Segment { text, .. } = &event {
                 // 只有标点/空白的结果不要触发一轮对话。

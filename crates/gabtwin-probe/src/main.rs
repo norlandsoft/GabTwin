@@ -106,6 +106,14 @@ struct Args {
     #[arg(long)]
     out: Option<PathBuf>,
 
+    /// --tts 的音色编号（Kokoro：中文女声 3–57，男声 58–102）
+    #[arg(long, default_value_t = 0)]
+    sid: i32,
+
+    /// --tts 的 onnxruntime provider（cpu / coreml）
+    #[arg(long, default_value = "cpu")]
+    provider: String,
+
     /// 列出输入设备后退出
     #[arg(long)]
     list_devices: bool,
@@ -240,7 +248,11 @@ fn main() -> Result<()> {
                     println!(
                         "[{:>7.2}s] 麦克风   {}",
                         t as f64 / 1000.0,
-                        if *muted { "暂停（TTS 播放）" } else { "恢复" }
+                        if *muted {
+                            "暂停（TTS 播放）"
+                        } else {
+                            "恢复"
+                        }
                     );
                 }
             }
