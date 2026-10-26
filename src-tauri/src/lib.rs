@@ -311,7 +311,17 @@ fn app_info() -> serde_json::Value {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 先读 .env，再读用户目录下的 .env；已有环境变量优先（不会被覆盖）。
+fn load_env() {
+    let _ = dotenvy::dotenv();
+    let user_env = gabtwin_home().join(".env");
+    if user_env.is_file() {
+        let _ = dotenvy::from_path(&user_env);
+    }
+}
+
 pub fn run() {
+    load_env();
     install_signal_logging();
     log(format!("GabTwin 启动 pid={}", std::process::id()));
 

@@ -42,13 +42,24 @@ TTS 与数字人是下一步，这一片只做文字。
 
 ## 配置
 
+推荐把 key 放进仓库根目录的 `.env`（已被 gitignore，权限 600）：
+
+```bash
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，填入 DEEPSEEK_API_KEY=sk-...
+./scripts/gabtwin-start.sh
+```
+
+也支持环境变量（优先级高于 `.env`）：
+
 ```bash
 export DEEPSEEK_API_KEY=sk-...          # 或 GABTWIN_LLM_KEY
 export GABTWIN_LLM_BASE=https://api.deepseek.com   # 默认
 export GABTWIN_LLM_MODEL=deepseek-chat             # 默认
-./scripts/gabtwin-start.sh
 ```
 
+应用启动时先读当前目录的 `.env`，再读 `$GABTWIN_HOME/.env`；已经存在的环境变量不会被覆盖。
 没有 key 也能跑识别；右下角会写"未配置 LLM key"。
 
 ## 事件

@@ -68,6 +68,13 @@ if [[ ! -f "$MODEL_DIR/tokens.txt" ]] || [[ ${#onnx_files[@]} -eq 0 ]]; then
   exit 2
 fi
 
+if [[ -f "$ROOT/.env" ]]; then
+  perm="$(stat -f %Lp "$ROOT/.env" 2>/dev/null || echo 600)"
+  if (( (8#$perm) & 077 )); then
+    echo "提示：.env 权限是 ${perm}，建议 chmod 600 .env（里面是 key）"
+  fi
+fi
+
 OFFLINE_DIR="$GABTWIN_HOME/models/sense-voice-zh-en-ja-ko-yue-2024-07-17"
 if [[ ! -d "$OFFLINE_DIR" ]]; then
   echo "提示：未找到 SenseVoice 定稿模型，句末会用流式结果（./scripts/fetch-model.sh sensevoice）"

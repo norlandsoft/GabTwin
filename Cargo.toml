@@ -25,6 +25,7 @@ cpal = "0.18"
 sherpa-onnx = "2.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 signal-hook = "0.3"
+dotenvy = "0.15"
 
 [profile.dev]
 opt-level = 1

@@ -27,7 +27,7 @@ TTS 与数字人还没接。
 ## 现在能跑
 
 ```bash
-export DEEPSEEK_API_KEY=sk-...  # 没有也能跑，只是不回话
+cp .env.example .env && chmod 600 .env   # 填入 DEEPSEEK_API_KEY；.env 已被 gitignore
 ./scripts/fetch-model.sh       # 下载默认 ASR 模型（流式 237 MB + 定稿 240 MB，国内镜像/直连/并行/校验）
 ./scripts/gabtwin-start.sh     # 启动桌面应用（自动编译、后台、带 PID 与日志）
 ./scripts/gabtwin-stop.sh      # 停止
