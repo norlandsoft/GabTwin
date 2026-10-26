@@ -1,3 +1,4 @@
+use chrono::Local;
 use gabtwin_session::{
     default_asr_model_dir, gabtwin_home, input_devices, replay_wav, run_mic, DeviceInfo,
     SessionConfig, SessionEvent,
@@ -7,6 +8,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
+
+/// 带时间戳的诊断日志。写到 stderr，启动脚本会把它落进 app.log。
+fn log(message: impl AsRef<str>) {
+    eprintln!("[{}] {}", Local::now().format("%H:%M:%S"), message.as_ref());
+}
+
+/// 被 kill / Ctrl+C 时留一行，避免下次再出现"它自己停了"的疑问。
+fn install_signal_logging() {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    let mut signals = match signal_hook::iterator::Signals::new([SIGINT, SIGTERM]) {
+        Ok(signals) => signals,
+        Err(err) => {
+            log(format!("无法安装信号处理器：{err}"));
+            return;
+        }
+    };
+    std::thread::spawn(move || {
+        for sig in signals.forever() {
+            log(format!("收到终止信号 {sig}，退出"));
+            std::process::exit(0);
+        }
+    });
+}
 
 #[derive(Default)]
 struct SessionState {
@@ -41,6 +65,7 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
         return Err("正在聆听，先停止再开始".into());
     }
 
+    log(format!("开始会话（{mode:?}）"));
     let stop = Arc::new(AtomicBool::new(false));
     *state.stop.lock().unwrap() = stop.clone();
 
@@ -65,9 +90,9 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
                 let _ = emit_target.emit("session-event", &event);
                 return;
             }
-            eprintln!("[gabtwin] {event:?}");
+            log(format!("{event:?}"));
             if let Err(err) = emit_target.emit("session-event", &event) {
-                eprintln!("[gabtwin] emit 失败：{err}");
+                log(format!("emit 失败：{err}"));
             }
         };
 
@@ -85,6 +110,7 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             );
         }
         running.store(false, Ordering::SeqCst);
+        log("会话结束");
         let _ = app_handle.emit(
             "session-event",
             SessionEvent::State {
@@ -129,6 +155,9 @@ fn app_info() -> serde_json::Value {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_signal_logging();
+    log(format!("GabTwin 启动 pid={}", std::process::id()));
+
     tauri::Builder::default()
         .manage(SessionState::default())
         .invoke_handler(tauri::generate_handler![
@@ -145,17 +174,17 @@ pub fn run() {
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(1500));
                     if let Err(err) = begin(&handle, Mode::Mic) {
-                        eprintln!("[gabtwin] 自动聆听失败：{err}");
+                        log(format!("自动聆听失败：{err}"));
                     }
                 });
             }
             if std::env::var_os("GABTWIN_AUTOREPLAY").is_some() {
-                eprintln!("[gabtwin] GABTWIN_AUTOREPLAY 已启用");
+                log("GABTWIN_AUTOREPLAY 已启用");
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(1500));
                     if let Err(err) = begin(&handle, Mode::Sample) {
-                        eprintln!("[gabtwin] 自动回放失败：{err}");
+                        log(format!("自动回放失败：{err}"));
                     }
                 });
             }

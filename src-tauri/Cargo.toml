@@ -17,4 +17,6 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
+chrono.workspace = true
+signal-hook.workspace = true
 gabtwin-session = { path = "../crates/gabtwin-session" }

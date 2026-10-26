@@ -35,6 +35,7 @@ cargo run -p gabtwin-probe -- --mic --seconds 10
 ```
 
 启动日志在 `~/Library/Application Support/GabTwin/logs/app.log`。
+`gabtwin-stop.sh` 默认只停脚本启动的实例；手动启动的用 `./scripts/gabtwin-stop.sh --all`。
 
 模型需要先下载，见 [docs/dev/01](docs/dev/01-voice-input.md)。
 

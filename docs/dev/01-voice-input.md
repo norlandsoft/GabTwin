@@ -80,8 +80,11 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 - `gabtwin-start.sh`：检查模型 → `cargo build -p gabtwin-app` → `nohup` 后台启动 →
   写 `$GABTWIN_HOME/gabtwin-app.pid` → 日志追加到 `$GABTWIN_HOME/logs/app.log`。
   已经在跑（包括手动启动的实例）就直接退出，不会起第二个。
-- `gabtwin-stop.sh`：先读 PID 文件；没有记录就按可执行文件名找实例。先 TERM，
-  5 秒内没退出再 KILL。
+- `gabtwin-stop.sh`：**默认只停 PID 文件里记录的那个实例**（即 `gabtwin-start.sh`
+  启动的）。手动启动的实例需要显式 `--all`，避免误杀同一台机器上另一份正在用的实例。
+  先 TERM，5 秒内没退出再 KILL。
+- 日志带时间戳；start / stop 脚本各留一行标记，应用收到 SIGTERM / SIGINT 时会写
+  `收到终止信号 N，退出`。也就是说，"它怎么停的"现在能从日志里查出来。
 
 环境变量（脚本原样传给应用）：
 

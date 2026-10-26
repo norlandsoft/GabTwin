@@ -76,9 +76,11 @@ fi
 
 # 4. 后台启动
 echo "启动 GabTwin…"
+printf '[%s] gabtwin-start.sh：启动 %s\n' "$(date '+%H:%M:%S')" "$BIN" >>"$LOG"
 nohup "$BIN" >>"$LOG" 2>&1 &
 pid=$!
 echo "$pid" >"$PID_FILE"
+printf '[%s] gabtwin-start.sh：pid=%s\n' "$(date '+%H:%M:%S')" "$pid" >>"$LOG"
 
 # 5. 起来后确认没立刻退出（模型缺失、权限问题会在日志里）
 sleep 1

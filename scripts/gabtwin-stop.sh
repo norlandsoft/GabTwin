@@ -3,7 +3,8 @@
 #
 #   ./scripts/gabtwin-stop.sh
 #
-# 先按 PID 文件停；没有 PID 文件时会找同路径的 gabtwin-app 进程（手动启动的也能停）。
+# 默认只停「由 gabtwin-start.sh 启动」的那个实例（PID 文件里记录的那个）。
+# 手动启动的实例需要显式 --all，避免误杀同一台机器上另一份正在用的实例。
 # 先 TERM，5 秒内没退出再 KILL。
 
 set -euo pipefail
@@ -12,6 +13,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
+LOG="$GABTWIN_HOME/logs/app.log"
+
+MODE=pid
+case "${1:-}" in
+  --all) MODE=all ;;
+  "") ;;
+  *) echo "用法：$0 [--all]" >&2; exit 2 ;;
+esac
 
 is_our_pid() {
   [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null && ps -p "$1" -o command= 2>/dev/null | grep -q "gabtwin-app"
@@ -27,6 +36,13 @@ pids_of_app() {
     sub(/.*\//, "", name)
     if (name == want) print pid
   }'
+}
+
+log_marker() {
+  local dir
+  dir="$(dirname "$LOG")"
+  mkdir -p "$dir"
+  echo "[$(date '+%H:%M:%S')] gabtwin-stop.sh：$1" >>"$LOG" 2>/dev/null || true
 }
 
 stop_pid() {
@@ -48,10 +64,11 @@ stop_pid() {
 
 found=0
 
-# 1. 首选 PID 文件
+# 1. 首选 PID 文件：这是本脚本启动的实例，默认只停它
 if [[ -f "$PID_FILE" ]]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if is_our_pid "${pid:-}"; then
+    log_marker "停止 pid=${pid}"
     stop_pid "$pid"
     found=1
   else
@@ -60,14 +77,20 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-# 2. 没有 PID 记录时，找手动启动的实例
+# 2. 没有 PID 记录时：默认不动别人的实例
 if [[ "$found" -eq 0 ]]; then
   pids="$(pids_of_app | tr '\n' ' ')"
   if [[ -z "${pids// /}" ]]; then
     echo "GabTwin 没有在运行。"
     exit 0
   fi
+  if [[ "$MODE" != all ]]; then
+    echo "发现实例（pid ${pids% }），但它不是本脚本启动的（没有 PID 文件），未动它。"
+    echo "确认要停，用：./scripts/gabtwin-stop.sh --all"
+    exit 0
+  fi
   for pid in $pids; do
+    log_marker "停止 pid=${pid}（--all）"
     stop_pid "$pid"
   done
 fi
