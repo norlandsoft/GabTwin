@@ -155,20 +155,35 @@ fn start_tts_worker(
 
         let mut started = false;
         let mut queued_ms: u64 = 0;
+        let mut first_push_at: Option<Instant> = None;
         while let Ok(command) = rx.recv() {
             match command {
                 TtsCommand::Stop => {
                     speaker.clear();
                     started = false;
                     queued_ms = 0;
+                    first_push_at = None;
                     mute.store(false, Ordering::SeqCst);
                 }
                 TtsCommand::Flush => {
-                    log(format!("TTS 排队 {} ms", queued_ms));
+                    // 合成期间已经在播的部分要扣掉，否则声音结束后还会多静音一段。
+                    let played = first_push_at
+                        .map(|at| at.elapsed().as_millis() as u64)
+                        .unwrap_or(0);
+                    let remaining = queued_ms.saturating_sub(played);
+                    log(format!("TTS 排队 {queued_ms} ms（剩余约 {remaining} ms）"));
                     let _ = app.emit(
                         "tts-queued",
-                        serde_json::json!({ "duration_ms": queued_ms }),
+                        serde_json::json!({ "duration_ms": remaining }),
                     );
+                    let flag = mute.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(remaining + 250));
+                        flag.store(false, Ordering::SeqCst);
+                        log("TTS 结束：恢复麦克风");
+                    });
+                    queued_ms = 0;
+                    first_push_at = None;
                 }
                 TtsCommand::Clause {
                     generation: g,
@@ -198,7 +213,12 @@ fn start_tts_worker(
                     queued_ms += ms;
                     let first = !started;
                     started = true;
-                    mute.store(true, Ordering::SeqCst);
+                    if first_push_at.is_none() {
+                        first_push_at = Some(Instant::now());
+                    }
+                    if !mute.swap(true, Ordering::SeqCst) {
+                        log("TTS 播放：屏蔽麦克风");
+                    }
                     speaker.push(audio);
                     if first {
                         let first_audio_ms = turn_started
@@ -362,7 +382,10 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
                 log(format!("emit 失败：{err}"));
             }
             if let SessionEvent::Segment { text, .. } = &event {
-                start_llm_turn(&llm_app, text.clone());
+                // 只有标点/空白的结果不要触发一轮对话。
+                if text.chars().any(|c| c.is_alphanumeric()) {
+                    start_llm_turn(&llm_app, text.clone());
+                }
             }
         };
 

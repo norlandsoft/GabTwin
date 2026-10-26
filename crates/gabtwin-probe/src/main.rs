@@ -235,6 +235,15 @@ fn main() -> Result<()> {
                 "[{:>7.2}s] 设备     {name}  ({sample_rate} Hz, {channels} ch)",
                 t as f64 / 1000.0
             ),
+            SessionEvent::Muted { muted } => {
+                if args.verbose {
+                    println!(
+                        "[{:>7.2}s] 麦克风   {}",
+                        t as f64 / 1000.0,
+                        if *muted { "暂停（TTS 播放）" } else { "恢复" }
+                    );
+                }
+            }
             SessionEvent::Level { rms } => {
                 if args.verbose && last_level.elapsed() >= Duration::from_millis(500) {
                     println!(

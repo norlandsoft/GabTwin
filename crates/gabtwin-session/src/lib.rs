@@ -54,6 +54,10 @@ pub enum SessionEvent {
     Level {
         rms: f32,
     },
+    /// 麦克风是否被 TTS 播放屏蔽（诊断用，UI 可忽略）。
+    Muted {
+        muted: bool,
+    },
     /// 当前句子的完整假设，会不断被改写。
     /// onset_ms = 从起始点算起的墙钟；audio_ms = 这一刻已经喂进去的音频位置。
     Partial {
@@ -319,6 +323,7 @@ where
             if !was_muted {
                 asr.reset();
                 was_muted = true;
+                sink(SessionEvent::Muted { muted: true });
             }
             continue;
         }
@@ -326,6 +331,7 @@ where
             asr.reset();
             segment_audio.clear();
             was_muted = false;
+            sink(SessionEvent::Muted { muted: false });
         }
 
         while pending.len() >= chunk_samples {
