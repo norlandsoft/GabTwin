@@ -41,24 +41,6 @@ pids_of_app() {
 
 mkdir -p "$LOG_DIR"
 
-# 1. 已经在跑就不再起第二个（包括手动启动、没有 PID 记录的实例）
-if [[ -f "$PID_FILE" ]]; then
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if is_our_pid "${pid:-}"; then
-    echo "GabTwin 已在运行（pid ${pid}）。"
-    echo "日志：$LOG"
-    echo "停止：./scripts/gabtwin-stop.sh"
-    exit 0
-  fi
-  rm -f "$PID_FILE"
-fi
-existing="$(pids_of_app | head -1)"
-if [[ -n "$existing" ]]; then
-  echo "GabTwin 已在运行（pid ${existing}，不是本脚本启动的）。"
-  echo "停止：./scripts/gabtwin-stop.sh"
-  exit 0
-fi
-
 # 2. 模型检查（app 里也有检查，这里提前给出可执行的下一步）
 shopt -s nullglob
 onnx_files=("$MODEL_DIR"/encoder*.onnx "$MODEL_DIR"/model*.onnx)
@@ -89,6 +71,46 @@ echo "编译应用…"
 if ! cargo build -p gabtwin-app --quiet; then
   echo "编译失败。" >&2
   exit 1
+fi
+
+# 3. TTS 引擎：默认 IndexTTS sidecar（GABTWIN_TTS=local 回退本地）
+if [[ "${GABTWIN_TTS:-indextts}" == "indextts" ]]; then
+  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$ROOT/models/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
+    if ! curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1; then
+      echo "启动 IndexTTS sidecar…"
+      nohup "$ROOT/.venv-mlx/bin/python" "$ROOT/scripts/index_tts_sidecar.py" \
+        --model-dir "$ROOT/models/index-tts-2.5-mlx" \
+        --ref "$GABTWIN_HOME/tts/index-ref.wav" \
+        --port 8798 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
+      echo $! > "$GABTWIN_HOME/tts-sidecar.pid"
+      for _ in $(seq 1 120); do
+        curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1 && break
+        sleep 1
+      done
+    fi
+    export GABTWIN_TTS_URL="http://127.0.0.1:8798"
+    echo "TTS：IndexTTS（127.0.0.1:8798）"
+  else
+    echo "提示：IndexTTS 运行时/模型/参考音缺失，回退本地 TTS"
+  fi
+fi
+
+# 1. 已经在跑就不再起第二个（包括手动启动、没有 PID 记录的实例）
+if [[ -f "$PID_FILE" ]]; then
+  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if is_our_pid "${pid:-}"; then
+    echo "GabTwin 已在运行（pid ${pid}）。"
+    echo "日志：$LOG"
+    echo "停止：./scripts/gabtwin-stop.sh"
+    exit 0
+  fi
+  rm -f "$PID_FILE"
+fi
+existing="$(pids_of_app | head -1)"
+if [[ -n "$existing" ]]; then
+  echo "GabTwin 已在运行（pid ${existing}，不是本脚本启动的）。"
+  echo "停止：./scripts/gabtwin-stop.sh"
+  exit 0
 fi
 
 # 4. 后台启动

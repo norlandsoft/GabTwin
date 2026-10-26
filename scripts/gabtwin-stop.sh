@@ -38,6 +38,20 @@ pids_of_app() {
   }'
 }
 
+stop_sidecar() {
+  local pid_file="$GABTWIN_HOME/tts-sidecar.pid"
+  [[ -f "$pid_file" ]] || return 0
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "停止 TTS sidecar（pid ${pid}）…"
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+
+stop_sidecar
+
 log_marker() {
   local dir
   dir="$(dirname "$LOG")"
@@ -82,7 +96,8 @@ if [[ "$found" -eq 0 ]]; then
   pids="$(pids_of_app | tr '\n' ' ')"
   if [[ -z "${pids// /}" ]]; then
     echo "GabTwin 没有在运行。"
-    exit 0
+    stop_sidecar
+exit 0
   fi
   if [[ "$MODE" != all ]]; then
     echo "发现实例（pid ${pids% }），但它不是本脚本启动的（没有 PID 文件），未动它。"

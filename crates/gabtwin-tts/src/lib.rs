@@ -86,10 +86,11 @@ impl RemoteTts {
                 .samples::<f32>()
                 .collect::<std::result::Result<Vec<_>, _>>()?,
         };
-        let samples: Vec<f32> = raw
+        let mut samples: Vec<f32> = raw
             .chunks(channels)
             .map(|frame| frame.iter().sum::<f32>() / channels as f32)
             .collect();
+        cleanup(&mut samples, spec.sample_rate);
         Ok((samples, spec.sample_rate))
     }
 }
@@ -383,7 +384,7 @@ impl Tts {
 }
 
 /// 去掉低频"咚咚"（80 Hz 高通）并在首尾做 15 ms 淡入淡出，避免拼接处的爆音。
-fn cleanup(samples: &mut [f32], sample_rate: u32) {
+pub fn cleanup(samples: &mut [f32], sample_rate: u32) {
     if samples.is_empty() || sample_rate == 0 {
         return;
     }
