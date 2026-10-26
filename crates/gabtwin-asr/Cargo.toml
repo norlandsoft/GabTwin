@@ -1,0 +1,11 @@
+[package]
+name = "gabtwin-asr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "流式语音识别（sherpa-onnx）封装"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+sherpa-onnx.workspace = true

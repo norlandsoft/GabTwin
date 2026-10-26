@@ -7,6 +7,7 @@
 | VAD | Silero VAD | 1.8 MB | ONNX | 待核（MIT？） | 已验证（DSH 在用） |
 | ASR | SenseVoiceSmall int8 | 239 MB | sherpa-onnx | 待核 | 已验证，RTF 0.025 |
 | ASR 备选 | streaming zipformer 中英 | 100–300 MB | sherpa-onnx | 待核（多为 Apache-2.0） | 未验证 |
+| ASR 流式（当前） | streaming zipformer zh int8 2025-06-30 | 167 MB | sherpa-onnx | 待核（icefall 代码 Apache-2.0，训练数据多源） | **已验证**，首字约 420 ms，RTF 0.071 |
 | 端点 | smart-turn 类小模型 | 待定 | ONNX | 待核 | 可选，先用规则 |
 | LLM | DeepSeek（云） | — | HTTPS | 服务条款 | 默认 |
 | LLM 兜底 | Qwen3-4B/8B 4bit | 2–5 GB | MLX / llama.cpp | Apache-2.0（待核） | 未接 |
@@ -33,7 +34,8 @@
 ## 分阶段选型
 
 ### M1（先跑通）
-- ASR：SenseVoice 整段（录完再转）
+- ASR：流式 zipformer 中文（已跑通，见 [dev/01](dev/01-voice-input.md)）；
+  SenseVoice 整段保留为离线/高精度备选
 - LLM：DeepSeek 流式
 - TTS：Piper 本地（CPU，快）
 
@@ -72,7 +74,8 @@
 规则：
 
 - 每个文件记录 `size` + `sha256`，启动时校验，失败即重下。
-- 下载支持多源（HuggingFace / hf-mirror），先并发 HEAD 探测，2xx 优先。
+- 下载默认走国内镜像 `hf-mirror.com`（`GABTWIN_HF_MIRROR` 可覆盖），**强制直连、不走代理**，
+  4 路并行，逐文件 sha256 校验；见 [ADR-009](05-decisions.md) 与 `scripts/fetch-model.sh`。
 - 断点续传；未完成的文件用 `.part` 后缀，校验通过才改名。
 - 模型目录可用环境变量 `GABTWIN_HOME` 覆盖（便于测试与离线部署）。
 
@@ -81,6 +84,7 @@
 **这是本项目最容易踩的坑，商用前必须逐项确认。**
 
 - [ ] SenseVoiceSmall 权重许可（代码 Apache-2.0，权重可能另有条款）
+- [ ] streaming zipformer zh 权重许可（icefall 训练代码 Apache-2.0；训练数据为多源中文合集）
 - [ ] Silero VAD 权重许可
 - [ ] Piper 各音色许可（部分为 CC BY-NC，**不可商用**）
 - [ ] Kokoro 权重与音色许可

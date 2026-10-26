@@ -1,10 +1,11 @@
 # GabTwin
 
-和你的数字分身闲聊。
+和一个角色闲聊。
 
 GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂、回答，并用一张会动嘴的脸看着你。
 
-**状态：M0 规划阶段，尚无运行代码。**
+**状态：M0.5 分项验证阶段。** 语音输入 + 实时字幕已跑通（本地流式识别，首字约 420 ms），
+其余分项按顺序验证中。
 
 ## 文档
 
@@ -17,6 +18,26 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 | [04 路线图](docs/04-roadmap.md) | M0–M4 里程碑与验收标准 |
 | [05 关键决策](docs/05-decisions.md) | ADR 与理由 |
 | [06 风险与开放问题](docs/06-risks.md) | 风险表、待验证清单 |
+| [规划评审 2026-10](docs/reviews/2026-10-26-plan-review.md) | M0 评审意见、需先定的决定、M0' 建议 |
+| [dev/01 语音输入](docs/dev/01-voice-input.md) | 第一个分项验证：架构、模型、实测数字、限制 |
+| [dev/02 ASR 模型对照](docs/dev/02-asr-model-compare.md) | 大模型 vs small-CTC：CER、首字延迟、RTF |
+
+## 现在能跑
+
+```bash
+./scripts/fetch-model.sh       # 下载模型（167 MB，国内镜像/直连/并行/校验）
+
+# 无麦克风：用模型自带 WAV 跑识别
+cargo run -p gabtwin-probe -- --wav "$HOME/Library/Application Support/GabTwin/models/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav"
+
+# 真实麦克风
+cargo run -p gabtwin-probe -- --mic --seconds 10
+
+# 桌面应用（开始聆听 / 停止 / 示例音频）
+cargo run -p gabtwin-app
+```
+
+模型需要先下载，见 [docs/dev/01](docs/dev/01-voice-input.md)。
 
 ## 目标平台
 
@@ -24,7 +45,7 @@ macOS 14+ / Apple Silicon。开发基线：M1 Max，32 GB，10 核 CPU，24 核 
 
 ## 三条原则
 
-1. **音频不出本机** —— 只有文本进 LLM 请求。
+1. **音频不出本机** —— 只有文本会离开本机（进 LLM；将来若用云 TTS，还有文本进 TTS）。
 2. **先半双工，再全双工** —— 先跑通"说完再答"，再处理打断。
 3. **数字人是可替换的渲染层** —— 晚接不亏，不绑架核心链路。
 

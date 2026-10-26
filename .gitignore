@@ -13,6 +13,9 @@ dist/
 *.pcm
 /models/
 
+# Tauri 生成的 ACL schema
+src-tauri/gen/
+
 # 系统
 .DS_Store
 *.log

@@ -1,0 +1,13 @@
+[package]
+name = "gabtwin-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "把采集与识别接成一条会话，向外发事件"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+hound.workspace = true
+gabtwin-audio = { path = "../gabtwin-audio" }
+gabtwin-asr = { path = "../gabtwin-asr" }

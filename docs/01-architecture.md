@@ -69,6 +69,22 @@ UI → Rust：`start_listening`、`stop_listening`、`interrupt`、`set_device`�
 
 `visemes[]` 的元素是 `{tMs, viseme, weight}`，`tMs` 相对该音频包起点。
 
+### 实现现状（M0.5 · 语音输入）
+
+第一个分项只用到"进"的一半，事件先合并成一条通道，减少样板：
+
+| 通道 | 载荷 | 说明 |
+|---|---|---|
+| `session-event` | `{kind: state / device / level / partial / segment / metrics / warning / error, …}` | Rust → UI 的唯一通道 |
+| 命令 | `start_listening` / `stop_listening` / `replay_sample` / `list_devices` / `app_info` | UI → Rust |
+
+已在代码里执行的约束：
+
+- **音频不过 IPC**：PCM 留在 Rust，UI 只收文本、电平与指标。
+- Tauri 的事件名不允许点号，所以是 `session-event` 而不是 `session.event`。
+- **播放时钟尚未引入**（还没有音频输出）；接 TTS 时必须补，否则口型会跟"包到达时间"漂移。
+- 端点延迟按**音频时间**计（最后一个有声帧之后的静音时长），这样实时与回放同一口径。
+
 ## 会话状态机
 
 ```text

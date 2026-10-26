@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GabTwin · 语音输入验证</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-state="idle">
+    <div class="app">
+      <header class="bar">
+        <div class="brand">
+          <span class="mark"></span>
+          <span class="name">GabTwin</span>
+          <span class="tag">语音输入验证</span>
+        </div>
+        <div class="status" data-state="idle">
+          <span class="pulse"></span>
+          <span id="statusText">待机</span>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="hint" id="hint">按「开始聆听」，然后说话。文字会随着你说，边出现。</div>
+        <div class="captions" id="captions"></div>
+      </main>
+
+      <footer class="dock">
+        <div class="level"><div class="level-fill" id="level"></div></div>
+        <div class="row">
+          <div class="metrics">
+            <div class="metric"><span class="k">首字</span><span class="v" id="first">—</span></div>
+            <div class="metric"><span class="k">静音</span><span class="v" id="endpoint">—</span></div>
+            <div class="metric"><span class="k">RTF</span><span class="v" id="rtf">—</span></div>
+          </div>
+          <div class="controls">
+            <button id="start" class="primary">开始聆听</button>
+            <button id="stop" disabled>停止</button>
+            <button id="sample" class="ghost">示例音频</button>
+          </div>
+        </div>
+        <div class="foot">
+          <span id="device">本地识别 · 音频不出本机</span>
+          <span id="model" class="dim"></span>
+        </div>
+      </footer>
+    </div>
+    <script src="main.js"></script>
+  </body>
+</html>

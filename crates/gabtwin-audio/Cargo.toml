@@ -1,0 +1,12 @@
+[package]
+name = "gabtwin-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "麦克风采集：设备枚举、无锁环形缓冲、电平"
+
+[dependencies]
+anyhow.workspace = true
+cpal.workspace = true
+ringbuf.workspace = true
+serde.workspace = true

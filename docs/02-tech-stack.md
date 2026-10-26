@@ -63,19 +63,22 @@
 
 ```toml
 [dependencies]
-cpal = "0.15"
-rubato = "0.16"
+cpal = "0.18"
 ringbuf = "0.4"
-sherpa-onnx = { git = "https://github.com/k2-fsa/sherpa-onnx", branch = "master" } # 或 crates.io 版本
-ort = "2"                     # Silero VAD，若不用 sherpa 自带
+sherpa-onnx = "2.0"           # ASR / VAD / TTS 一个运行时，自带重采样
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 tauri = "2"
-webrtc-audio-processing = "0.3"
+# webrtc-audio-processing = "2.1"   # 仅在 macOS VoiceProcessingIO 不可行时启用
 ```
 
-> 版本号在 M1 开始时按实际可编译的组合锁定，不追新。
+> 以上是 2026-10-26 实际编译通过的组合（精确版本见 `Cargo.lock`，应用必须提交它）。
+> 相对初稿的改动：
+> - `cpal` 0.15 → 0.18（API 有破坏性变化：`device.name()` 改为 `description()`，`build_input_stream` 收 `StreamConfig` 值）；
+> - 去掉 `rubato`：sherpa-onnx 的 `accept_waveform(sample_rate, …)` 内部重采样；
+> - 去掉 `ort`：sherpa-onnx 已捆绑 ONNX Runtime，VAD/TTS 不需要第二个运行时；
+> - `sherpa-onnx` 用 crates.io 的 2.0，不跟 git master（可复现构建）。
 
 ## 待验证（M0 结束前）
 
