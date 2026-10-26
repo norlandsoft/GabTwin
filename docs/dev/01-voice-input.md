@@ -31,21 +31,24 @@ ui/                     静态前端：大字号字幕、电平、延迟读数
 
 | 项 | 值 |
 |---|---|
-| 模型 | `streaming-paraformer-bilingual-zh-en`（中英，FunASR paraformer） |
-| 来源 | https://huggingface.co/csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en |
-| 体积 | encoder.int8 166 MB + decoder.int8 72 MB + tokens |
-| 类型 | streaming paraformer（非自回归，encoder + decoder） |
+| 结构 | **流式 paraformer 出字幕 + 句末 SenseVoice 定稿** |
+| 流式 | `streaming-paraformer-bilingual-zh-en`（Apache-2.0；166 + 72 MB） |
+| 定稿 | `sense-voice-zh-en-ja-ko-yue-2024-07-17`（FunASR 许可，待核；240 MB） |
+| 类型 | 流式：paraformer；定稿：SenseVoice 离线（带标点与数字规整） |
 | 采样率 | 16 kHz（输入 48 kHz，sherpa-onnx 内部重采样） |
-| 许可 | **Apache-2.0** |
-| 备选 | 中英 zipformer（英文最好、中文重复字）；纯中文 zipformer（中文 0%）；九语 zipformer（会把中文口音英文串成日/越语，不推荐）；small-CTC（省 CPU） |
+| 备选 | 纯中文 zipformer（中文 0%、不能英文）；中英 zipformer（英文更准、中文重复字）；九语 zipformer（会串日/越语，不推荐） |
 
 落盘位置（`GABTWIN_HOME` 可覆盖）：
 
 ```text
-~/Library/Application Support/GabTwin/models/streaming-paraformer-bilingual-zh-en/
-├── encoder.int8.onnx  81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a
-├── decoder.int8.onnx  f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f
-└── tokens.txt         59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6
+models/
+├── streaming-paraformer-bilingual-zh-en/      流式出字
+│   ├── encoder.int8.onnx  81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a
+│   ├── decoder.int8.onnx  f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f
+│   └── tokens.txt         59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6
+└── sense-voice-zh-en-ja-ko-yue-2024-07-17/   句末定稿
+    ├── model.int8.onnx    c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51
+    └── tokens.txt         f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc
 ```
 
 示例音频放在 `$GABTWIN_HOME/samples/0.wav`，所有模型共用。
@@ -97,6 +100,8 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 | `GABTWIN_MODEL_DIR` | 直接指定模型目录 |
 | `GABTWIN_DEVICE` | 指定输入设备名 |
 | `GABTWIN_ENDPOINT` | 句尾静音秒数（默认 0.8） |
+| `GABTWIN_ENGINE` | `streaming` 关闭句末定稿（默认开启） |
+| `GABTWIN_OFFLINE_MODEL_DIR` | SenseVoice 定稿模型目录 |
 | `GABTWIN_SAMPLE_WAV` | 示例按钮使用的 WAV |
 | `GABTWIN_AUTOREPLAY` | 启动后自动回放示例 |
 
@@ -104,12 +109,12 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 
 | 指标 | 值 | 说明 |
 |---|---|---|
-| 模型冷加载 | 0.72 s | 进程内第一次创建识别器 |
-| RTF | 0.169–0.185 | 5.61 s 音频 / 0.95–1.04 s 识别，2 线程 CPU |
-| 首字 | 250–550 ms | 从起始点到第一段非空 partial（中/英，多次） |
-| 句尾定稿 | 规则 0.8 s 静音 | 实测静音 0.7–1.2 s，含端点判定与解码滞后 |
+| 两个模型加载 | 1.17 s | 流式 + 定稿模型一起加载 |
+| RTF | 0.235–0.266 | 流式 + 句末定稿总耗时 / 音频，2 线程 CPU |
+| 首字 | 250–600 ms | 起始点 → 第一段 partial（流式 paraformer） |
+| 句末定稿延迟 | 0.66–1.31 s | 最后有声帧 → 带标点的定稿（含 SenseVoice 重解） |
 | 采集 | 48 kHz 单声道 | 外置麦克风；采集 3.00 s 得到 3.05 s 音频 |
-| 内存 | 峰值 RSS 530 MB | 含模型；`/usr/bin/time -l` 实测 |
+| 内存 | 峰值 RSS 905 MB | 两个模型都驻留；`/usr/bin/time -l` 实测 |
 
 与流式模型相关的处理（都在代码里）：
 
@@ -118,6 +123,9 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 - **端点不门控（重要）**：为了压掉假断句，曾经在"真实静音不足 250 ms"时忽略 endpoint。
   结果 sherpa 的在线流一旦 endpoint 为真就不再 ready，**整条流永久卡死**（14:37 那次 40 秒没有输出）。
   现在的规则是：模型报 endpoint 就 reset；不要"忽略但不动"。
+- **句末定稿**：每句话结束时，用缓存的这段音频再跑一次 SenseVoice，用它替换流式文本
+  （失败或结果为空则退回流式结果）。标点、数字规整都来自这一步；边说边看的 partial 仍不带标点。
+  关掉它：`GABTWIN_ENGINE=streaming`。
 
 口径说明（复现时看这三个数）：
 
@@ -132,17 +140,17 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 
 ![定稿：句尾静音 861 ms 后落定，底部是首字/静音/RTF](shots/02-segment-final.png)
 
-![英文：能识别，但会漏词——paraformer 的短板，见 dev/02](shots/03-english.png)
+![英文：句末定稿（SenseVoice）补齐了流式漏掉的词，并加上标点](shots/03-english.png)
 
 ## 已知限制（按影响排序）
 
 1. **没有 VAD 预筛**：现在所有音频都送识别器，安静时也在解码（CPU 空转）。M2 接 Silero VAD 后
    应当只在有语音时解码。
 2. **端点只有规则**：0.8 s 静音。句中出现较长停顿时会切断（"我想想……"会被拆成两句）。
-3. **没有标点**：模型输出不带标点；显示与后续 TTS 都需要一个标点/断句步骤。
+3. **partial 没有标点**：句末定稿才带标点（SenseVoice）；边说边看的中间结果仍是裸文本。
 4. **单流**：一次只能一个会话；停止靠旗标，线程退出时 Stream 才释放。
-5. **英文会漏词**：英文 10.9%、中英混说 25.5%，比中英 zipformer（英文 2.2%）差；
-   要英文优先可切 `GABTWIN_MODEL_DIR=.../streaming-zipformer-bilingual-zh-en-2023-02-20`。
+5. **流式部分的英文会漏词**：英文 10.9%（中英 zipformer 是 2.2%），句末定稿会修正，
+   但"边说边看"的中间结果仍可能不完整；中英混说 25.5% 仍是短板。
 6. **首字 250–550 ms**：比中英 zipformer（385 ms）略慢，但中文更准；对照见 [dev/02](02-asr-model-compare.md)。
 7. **设备热插拔未处理**：AirPods 进出会改采样率/路由，当前会直接报流错误，需要重启会话。
 8. **长跑不够**：最长单次约 104 秒（一次真实测试）；10 分钟连续采集、内存增长、环形缓冲溢出率都还没测。

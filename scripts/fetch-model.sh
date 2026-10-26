@@ -31,7 +31,7 @@ GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
-MODELS="zipformer-zh small-ctc bilingual multilingual paraformer"
+MODELS="zipformer-zh small-ctc bilingual multilingual paraformer sensevoice"
 
 repo_of() {
   case "$1" in
@@ -40,6 +40,7 @@ repo_of() {
     bilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
     multilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
     paraformer) echo "csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en" ;;
+    sensevoice) echo "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
     *) return 1 ;;
   esac
 }
@@ -51,6 +52,7 @@ dir_of() {
     bilingual) echo "streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
     multilingual) echo "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
     paraformer) echo "streaming-paraformer-bilingual-zh-en" ;;
+    sensevoice) echo "sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
   esac
 }
 
@@ -79,6 +81,12 @@ decoder-epoch-99-avg-1.int8.onnx:1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992
 joiner-epoch-99-avg-1.int8.onnx:1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0
 tokens.txt:a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3
 bpe.model:bcae393dbc5611be5ffa4c7ae0841558978a5a4f484008cb9dff3a2cc97ebe01
+EOF
+      ;;
+    sensevoice)
+      cat <<'EOF'
+model.int8.onnx:c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51
+tokens.txt:f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc
 EOF
       ;;
     paraformer)
@@ -241,13 +249,17 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
-    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer) TARGET="$1"; shift ;;
+    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer|sensevoice) TARGET="$1"; shift ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "$TARGET" ]]; then
-  TARGET=paraformer
+  # 没参数时下"当前默认组合"：流式 paraformer + 句末 SenseVoice
+  for m in paraformer sensevoice; do fetch_model "$m"; done
+  echo
+  echo "完成。校验：./scripts/fetch-model.sh --check"
+  exit 0
 fi
 
 if [[ "$MODE" == check ]]; then

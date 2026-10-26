@@ -7,7 +7,8 @@
 | VAD | Silero VAD | 1.8 MB | ONNX | 待核（MIT？） | 已验证（DSH 在用） |
 | ASR | SenseVoiceSmall int8 | 239 MB | sherpa-onnx | 待核 | 已验证，RTF 0.025 |
 | ASR 备选 | streaming zipformer 中英 | 100–300 MB | sherpa-onnx | 待核（多为 Apache-2.0） | 未验证 |
-| ASR 流式（当前默认） | streaming paraformer 中英 int8 | 237 MB | sherpa-onnx | **Apache-2.0** | **已验证**：中文 0.7%、英文 10.9%、混说 25.5%；首字约 550 ms，RTF 0.185 |
+| ASR 流式（当前默认） | streaming paraformer 中英 int8 | 237 MB | sherpa-onnx | **Apache-2.0** | **已验证**：中文 0.7%、英文 10.9%、混说 25.5%；首字约 550 ms |
+| ASR 定稿（当前默认） | SenseVoice 中英日韩粤 int8 | 240 MB | sherpa-onnx offline | 待核（FunASR 自定义） | **已验证**：中英整句、带标点；RTF 0.08–0.10 |
 | ASR 流式（中文专用） | streaming zipformer zh int8 2025-06-30 | 167 MB | sherpa-onnx | 待核（icefall 代码 Apache-2.0，训练数据多源） | 已验证，中文 0%，英文不可用 |
 | ASR 流式（九语，不推荐） | streaming zipformer 9 语 int8 | 340 MB | sherpa-onnx | 待核（PengChengStarling） | 中文 1.4%，但中文口音英文会串日/越语 |
 | ASR 流式（中英双语） | streaming zipformer bilingual zh-en 2023-02-20 | 198 MB | sherpa-onnx | **Apache-2.0** | 已验证，英文 2.2% 但中文有重复字（6.2%），未采用 |

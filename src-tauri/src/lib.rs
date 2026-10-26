@@ -1,7 +1,7 @@
 use chrono::Local;
 use gabtwin_session::{
-    default_asr_model_dir, gabtwin_home, input_devices, replay_wav, run_mic, DeviceInfo,
-    SessionConfig, SessionEvent,
+    default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
+    run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,6 +51,12 @@ fn model_dir() -> PathBuf {
         .unwrap_or_else(default_asr_model_dir)
 }
 
+fn offline_model_dir() -> PathBuf {
+    std::env::var_os("GABTWIN_OFFLINE_MODEL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_offline_model_dir)
+}
+
 fn sample_wav_path() -> PathBuf {
     if let Some(path) = std::env::var_os("GABTWIN_SAMPLE_WAV") {
         return PathBuf::from(path);
@@ -89,6 +95,20 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     if let Ok(v) = std::env::var("GABTWIN_ENDPOINT") {
         if let Ok(v) = v.parse::<f32>() {
             cfg.asr.endpoint_silence_s = v;
+        }
+    }
+
+    // 句末用 SenseVoice 定稿；GABTWIN_ENGINE=streaming 可关掉。
+    let engine_enabled = std::env::var("GABTWIN_ENGINE")
+        .map(|v| v != "streaming")
+        .unwrap_or(true);
+    if engine_enabled {
+        let dir = offline_model_dir();
+        if dir.is_dir() {
+            cfg.offline = Some(OfflineAsrConfig::new(dir.clone()));
+            log(format!("句末定稿：SenseVoice（{}）", dir.display()));
+        } else {
+            log("未找到 SenseVoice 定稿模型，句末退回流式文本");
         }
     }
 

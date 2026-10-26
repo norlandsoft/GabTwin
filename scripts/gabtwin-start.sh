@@ -68,6 +68,11 @@ if [[ ! -f "$MODEL_DIR/tokens.txt" ]] || [[ ${#onnx_files[@]} -eq 0 ]]; then
   exit 2
 fi
 
+OFFLINE_DIR="$GABTWIN_HOME/models/sense-voice-zh-en-ja-ko-yue-2024-07-17"
+if [[ ! -d "$OFFLINE_DIR" ]]; then
+  echo "提示：未找到 SenseVoice 定稿模型，句末会用流式结果（./scripts/fetch-model.sh sensevoice）"
+fi
+
 # 3. 编译（已是最新时很快）
 echo "编译应用…"
 if ! cargo build -p gabtwin-app --quiet; then

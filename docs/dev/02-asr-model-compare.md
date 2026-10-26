@@ -149,3 +149,38 @@ small-CTC 在 0.wav 上丢了一个语气词"啊"。对字幕无伤大雅，但�
 
 **选择**：中文是主场景，paraformer 的中文最好、混说最好、不串语种、许可干净；
 英文 10.9% 是明确短板，英文优先时可切中英 zipformer（`GABTWIN_MODEL_DIR`）。
+
+---
+
+## 追加三：流式 + SenseVoice 句末定稿（当前默认）
+
+**问题**：paraformer 流式的英文会漏词（用户实测只说出了 "schedule a"），中文罕见词也错
+（"狸花猫" → "梨花猫"）；而 SenseVoice 离线整段几乎全对，还带标点，但不能直接流式出字。
+
+**方案**：
+
+1. 流式 paraformer 继续负责"边说边出字"；
+2. 每句话结束时，用会话里缓存的这段音频再跑一次 SenseVoice；
+3. 用 SenseVoice 的文本替换句末文本（失败或为空则退回流式结果）。
+
+实现只在 `gabtwin-session` 里加了一层 `finalize_text`，流式路径、端点、UI 都不变。
+关掉：`GABTWIN_ENGINE=streaming`。
+
+**实测（同一批话）**：
+
+| 输入 | 流式 paraformer | 句末定稿（SenseVoice） |
+|---|---|---|
+| 好的，你知道狸花猫吗？ | 好的你知道梨花猫吗 | **好的，你知道狸花猫吗？** |
+| 狸花猫你懂不懂 | 梨花猫你懂不懂 | **狸花猫你懂不懂？** |
+| Let's schedule a meeting tomorrow at three. | let's schedule a meeting tomorrow at | **Let's schedule a meeting tomorrow, at 3.** |
+| 真实人声 5.6 s | 有"啊/呢"但可读 | **带逗号、句号、语气词完整** |
+
+**代价**：
+
+- 句末多 200–400 ms（SenseVoice 每段解码 160–440 ms）；
+- 内存从 530 MB 涨到 905 MB（两个模型驻留）；
+- SignalVoice 权重许可是 FunASR 自定义协议，商用前必须确认；
+- partial 仍不带标点，定稿才带。
+
+**为什么不做全 SenseVoice 流式**：需要滑窗重解码 + 前缀合并，长句会反复解码同一段，
+RTF 会随句长上升；当前"流式出字 + 句末精修"已经把两个短板都补上了。

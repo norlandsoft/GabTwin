@@ -25,7 +25,7 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 ## 现在能跑
 
 ```bash
-./scripts/fetch-model.sh       # 下载默认 ASR 模型（237 MB，国内镜像/直连/并行/校验）
+./scripts/fetch-model.sh       # 下载默认 ASR 模型（流式 237 MB + 定稿 240 MB，国内镜像/直连/并行/校验）
 ./scripts/gabtwin-start.sh     # 启动桌面应用（自动编译、后台、带 PID 与日志）
 ./scripts/gabtwin-stop.sh      # 停止
 

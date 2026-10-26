@@ -17,7 +17,8 @@
 use anyhow::{bail, Result};
 use clap::Parser;
 use gabtwin_session::{
-    default_asr_model_dir, input_devices, replay_wav, run_mic, SessionConfig, SessionEvent,
+    default_asr_model_dir, input_devices, read_wav, replay_wav, run_mic, OfflineAsr,
+    OfflineAsrConfig, SessionConfig, SessionEvent,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -84,6 +85,14 @@ struct Args {
     #[arg(long)]
     verbose: bool,
 
+    /// 用离线模型（SenseVoice）整段识别一个 WAV，然后退出
+    #[arg(long)]
+    offline: Option<PathBuf>,
+
+    /// 句末用离线模型（SenseVoice）定稿
+    #[arg(long)]
+    offline_final: Option<PathBuf>,
+
     /// 列出输入设备后退出
     #[arg(long)]
     list_devices: bool,
@@ -105,6 +114,27 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(offline_dir) = &args.offline {
+        let wav = args
+            .wav
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("--offline 需要同时给 --wav"))?;
+        let (mono, sr) = read_wav(wav)?;
+        let asr = OfflineAsr::new(&OfflineAsrConfig::new(offline_dir.clone()))
+            .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        let started = Instant::now();
+        let text = asr.transcribe(sr, &mono);
+        let elapsed = started.elapsed().as_secs_f64();
+        println!("{text}");
+        println!(
+            "— 离线识别 {:.2} s 音频 / {:.0} ms，RTF {:.3}",
+            mono.len() as f64 / sr as f64,
+            elapsed * 1000.0,
+            elapsed / (mono.len() as f64 / sr as f64)
+        );
+        return Ok(());
+    }
+
     let model_dir = args.model_dir.unwrap_or_else(default_asr_model_dir);
     if !model_dir.is_dir() {
         bail!(
@@ -119,6 +149,9 @@ fn main() -> Result<()> {
     cfg.chunk_ms = args.chunk_ms;
     cfg.asr.beam_search = args.beam;
     cfg.asr.blank_penalty = args.blank_penalty;
+    if let Some(dir) = &args.offline_final {
+        cfg.offline = Some(OfflineAsrConfig::new(dir.clone()));
+    }
     cfg.warmup_ms = args.warmup_ms;
     if let Some(device) = &args.device {
         cfg.capture.device_name = Some(device.clone());

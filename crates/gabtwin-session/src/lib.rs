@@ -11,9 +11,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub use gabtwin_asr::{OfflineAsr, OfflineAsrConfig};
 pub use gabtwin_audio::{input_devices, DeviceInfo};
 
 pub const MODEL_DIR_NAME: &str = "streaming-paraformer-bilingual-zh-en";
+/// 句末定稿用的离线模型（SenseVoice）。
+pub const OFFLINE_MODEL_DIR_NAME: &str = "sense-voice-zh-en-ja-ko-yue-2024-07-17";
 
 /// GabTwin 的根目录。`GABTWIN_HOME` 可覆盖（测试、离线部署）。
 pub fn gabtwin_home() -> PathBuf {
@@ -30,6 +33,10 @@ pub fn gabtwin_home() -> PathBuf {
 
 pub fn default_asr_model_dir() -> PathBuf {
     gabtwin_home().join("models").join(MODEL_DIR_NAME)
+}
+
+pub fn default_offline_model_dir() -> PathBuf {
+    gabtwin_home().join("models").join(OFFLINE_MODEL_DIR_NAME)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -89,6 +96,8 @@ pub struct SessionConfig {
     /// 会话开始时先喂多少毫秒静音给识别器做预热。
     /// 流式模型没有这段热身时，用户开口的第一个词容易被吃掉。
     pub warmup_ms: u32,
+    /// 句末定稿用的离线识别器（可选）。设了就用它替换流式的句末文本。
+    pub offline: Option<OfflineAsrConfig>,
 }
 
 impl SessionConfig {
@@ -99,6 +108,7 @@ impl SessionConfig {
             chunk_ms: 50,
             onset_rms: 0.01,
             warmup_ms: 0,
+            offline: None,
         }
     }
 }
@@ -156,7 +166,7 @@ impl Stats {
     fn on_update<F: FnMut(SessionEvent)>(&mut self, update: AsrUpdate, sink: &mut F) {
         match update {
             AsrUpdate::Partial(text) => {
-                let text = strip_leading_filler(&text);
+                let text = strip_trailing_filler(&strip_leading_filler(&text));
                 let onset_ms = self
                     .speech_start
                     .map(|t| t.elapsed().as_millis() as u64)
@@ -176,7 +186,7 @@ impl Stats {
                 });
             }
             AsrUpdate::Segment(text) => {
-                let text = strip_leading_filler(&text);
+                let text = strip_trailing_filler(&strip_leading_filler(&text));
                 let onset_ms = self
                     .speech_start
                     .map(|t| t.elapsed().as_millis() as u64)
@@ -232,6 +242,24 @@ where
         });
         anyhow::anyhow!(msg)
     })?;
+    let offline = match &cfg.offline {
+        Some(config) => match OfflineAsr::new(config) {
+            Ok(asr) => {
+                sink(SessionEvent::State {
+                    state: "offline_ready".into(),
+                });
+                Some(asr)
+            }
+            Err(err) => {
+                sink(SessionEvent::Warning {
+                    message: format!("句末定稿模型不可用，退回流式文本：{err:#}"),
+                });
+                None
+            }
+        },
+        None => None,
+    };
+    let mut segment_audio: Vec<f32> = Vec::new();
 
     let mut capture = match Capture::start(&cfg.capture) {
         Ok(c) => c,
@@ -278,6 +306,7 @@ where
         while pending.len() >= chunk_samples {
             let frame: Vec<f32> = pending.drain(..chunk_samples).collect();
             let mono = downmix(&frame, channels);
+            segment_audio.extend_from_slice(&mono);
             let level = rms(&mono);
             stats.on_audio(&mono, level, cfg.onset_rms);
 
@@ -290,13 +319,28 @@ where
             let updates = asr.accept(sr, &mono);
             stats.proc_time += tick.elapsed();
             for update in updates {
-                stats.on_update(update, &mut sink);
+                match update {
+                    AsrUpdate::Segment(text) => {
+                        let text =
+                            finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
+                        segment_audio.clear();
+                        stats.on_update(AsrUpdate::Segment(text), &mut sink);
+                    }
+                    other => stats.on_update(other, &mut sink),
+                }
             }
         }
     }
 
     for update in asr.finish() {
-        stats.on_update(update, &mut sink);
+        match update {
+            AsrUpdate::Segment(text) => {
+                let text = finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
+                segment_audio.clear();
+                stats.on_update(AsrUpdate::Segment(text), &mut sink);
+            }
+            other => stats.on_update(other, &mut sink),
+        }
     }
 
     if capture.overflowed.load(Ordering::Relaxed) {
@@ -330,6 +374,19 @@ where
         state: "loading".into(),
     });
     let mut asr = Asr::new(&cfg.asr)?;
+    let offline = match &cfg.offline {
+        Some(config) => match OfflineAsr::new(config) {
+            Ok(asr) => Some(asr),
+            Err(err) => {
+                sink(SessionEvent::Warning {
+                    message: format!("句末定稿模型不可用，退回流式文本：{err:#}"),
+                });
+                None
+            }
+        },
+        None => None,
+    };
+    let mut segment_audio: Vec<f32> = Vec::new();
     sink(SessionEvent::State {
         state: "replaying".into(),
     });
@@ -354,12 +411,21 @@ where
         fed += chunk.len() as u64;
         let level = rms(chunk);
         stats.on_audio(chunk, level, cfg.onset_rms);
+        segment_audio.extend_from_slice(chunk);
         sink(SessionEvent::Level { rms: level });
         let tick = Instant::now();
         let updates = asr.accept(sr, chunk);
         stats.proc_time += tick.elapsed();
         for update in updates {
-            stats.on_update(update, &mut sink);
+            match update {
+                AsrUpdate::Segment(text) => {
+                    let text =
+                        finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
+                    segment_audio.clear();
+                    stats.on_update(AsrUpdate::Segment(text), &mut sink);
+                }
+                other => stats.on_update(other, &mut sink),
+            }
         }
     }
 
@@ -377,12 +443,27 @@ where
         let updates = asr.accept(sr, chunk);
         stats.proc_time += tick.elapsed();
         for update in updates {
-            stats.on_update(update, &mut sink);
+            match update {
+                AsrUpdate::Segment(text) => {
+                    let text =
+                        finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
+                    segment_audio.clear();
+                    stats.on_update(AsrUpdate::Segment(text), &mut sink);
+                }
+                other => stats.on_update(other, &mut sink),
+            }
         }
     }
 
     for update in asr.finish() {
-        stats.on_update(update, &mut sink);
+        match update {
+            AsrUpdate::Segment(text) => {
+                let text = finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
+                segment_audio.clear();
+                stats.on_update(AsrUpdate::Segment(text), &mut sink);
+            }
+            other => stats.on_update(other, &mut sink),
+        }
     }
 
     sink(stats.metrics());
@@ -392,8 +473,50 @@ where
     Ok(())
 }
 
+/// 句末用离线模型重解这一段音频；失败或结果为空时退回流式文本。
+fn finalize_text(
+    offline: Option<&OfflineAsr>,
+    sample_rate: u32,
+    audio: &[f32],
+    fallback: String,
+    stats: &mut Stats,
+) -> String {
+    let Some(asr) = offline else {
+        return fallback;
+    };
+    if audio.len() < (sample_rate as usize / 5) {
+        return fallback;
+    }
+    let tick = Instant::now();
+    let text = asr.transcribe(sample_rate, audio);
+    stats.proc_time += tick.elapsed();
+    if text.trim().is_empty() {
+        fallback
+    } else {
+        text
+    }
+}
+
 /// 某些模型在长静音后会多吐一个语气词（"嗯"/"啊"）。它通常不是用户说的，
 /// 在显示与落账前去掉，避免每条都带一个"嗯"。
+fn strip_trailing_filler(text: &str) -> String {
+    let mut out = text.trim().to_string();
+    for filler in ["嗯", "啊", "哦"] {
+        for punct in ["", "。", "！", "？", ".", "!", "?"] {
+            let suffix = format!("{filler}{punct}");
+            if out.ends_with(&suffix) {
+                let cut = out.len() - suffix.len();
+                let head = out[..cut].trim_end().to_string();
+                if !head.is_empty() {
+                    out = format!("{head}{punct}");
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn strip_leading_filler(text: &str) -> String {
     for filler in ["嗯", "啊", "哦", "呃", "唉"] {
         if let Some(rest) = text.strip_prefix(filler) {
@@ -415,7 +538,7 @@ fn warmup(asr: &mut Asr, sample_rate: u32, ms: u32) {
     let _ = asr.accept(sample_rate, &silence);
 }
 
-fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {
+pub fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {
     let mut reader = hound::WavReader::open(path)
         .with_context(|| format!("打开 WAV 失败：{}", path.display()))?;
     let spec = reader.spec();

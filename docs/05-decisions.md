@@ -205,3 +205,24 @@ Piper 音色一般，但 CPU 实时、依赖简单。
 - **英文会漏词**（10.9%），英文优先时切 `streaming-zipformer-bilingual-zh-en-2023-02-20`；
 - paraformer 首字略慢（550 ms）、RTF 0.185，仍在预算内；内存 530 MB；
 - 许可干净（Apache-2.0），比九语模型更适合商用路径。
+
+---
+
+## ADR-012 · 流式出字 + SenseVoice 句末定稿
+
+**背景**：单一模型无法同时满足"实时出字"和"中英都准"：paraformer 英文漏词、罕见词错；
+SenseVoice 几乎全对且带标点，但它是离线模型。
+
+**决定**：流式 paraformer 负责 partial；每句话结束时用 SenseVoice 重解这段音频，
+替换句末文本。`GABTWIN_ENGINE=streaming` 可退回纯流式。
+
+**理由**（实测见 [dev/02](dev/02-asr-model-compare.md)）：
+- 中文："狸花猫"从错到对；英文整句从"schedule a"到完整带标点；
+- 只改会话层的一小段，不动流式、端点与 UI；
+- 定稿延迟 0.66–1.31 s，仍在 M1 的 1.5 s 首响预算内。
+
+**后果**：
+- 句末多 200–400 ms；内存 905 MB（两个模型）；
+- partial 无标点，定稿才有；
+- SenseVoice 权重许可（FunASR 自定义）商用前必须确认；
+- 若以后要单模型，再评估全 SenseVoice 滑窗方案。

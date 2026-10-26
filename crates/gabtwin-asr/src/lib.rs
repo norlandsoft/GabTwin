@@ -4,7 +4,10 @@
 //! 端点判定用 sherpa-onnx 自带规则（rule1 = 静音多少秒算一句话结束）。
 
 use anyhow::{bail, Context, Result};
-use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
+use sherpa_onnx::{
+    OfflineRecognizer, OfflineRecognizerConfig, OnlineRecognizer, OnlineRecognizerConfig,
+    OnlineStream,
+};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,5 +243,69 @@ impl Asr {
         self.recognizer.reset(&self.stream);
         self.last_text.clear();
         out
+    }
+}
+
+/// 离线识别（SenseVoice）：一次喂完整段音频，拿最终文本。
+/// 用于"流式出字幕 + 句末用更强模型定稿"的组合。
+#[derive(Debug, Clone)]
+pub struct OfflineAsrConfig {
+    pub model_dir: PathBuf,
+    pub num_threads: i32,
+    /// None = auto（模型自带语言识别）
+    pub language: Option<String>,
+    pub use_itn: bool,
+}
+
+impl OfflineAsrConfig {
+    pub fn new(model_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            model_dir: model_dir.into(),
+            num_threads: 2,
+            language: None,
+            use_itn: true,
+        }
+    }
+}
+
+pub struct OfflineAsr {
+    recognizer: OfflineRecognizer,
+}
+
+impl OfflineAsr {
+    pub fn new(cfg: &OfflineAsrConfig) -> Result<Self> {
+        let dir = &cfg.model_dir;
+        let model = pick_onnx(dir, "model").ok_or_else(|| {
+            anyhow::anyhow!(
+                "找不到 model*.onnx（{}）\n提示：SenseVoice 需要 model.int8.onnx + tokens.txt",
+                dir.display()
+            )
+        })?;
+        let tokens = dir.join("tokens.txt");
+        if !tokens.is_file() {
+            bail!("模型文件缺失：{}", tokens.display());
+        }
+
+        let mut config = OfflineRecognizerConfig::default();
+        config.model_config.sense_voice.model = Some(model.display().to_string());
+        config.model_config.sense_voice.language = cfg.language.clone();
+        config.model_config.sense_voice.use_itn = cfg.use_itn;
+        config.model_config.tokens = Some(tokens.display().to_string());
+        config.model_config.num_threads = cfg.num_threads;
+        config.model_config.provider = Some("cpu".to_string());
+
+        let recognizer = OfflineRecognizer::create(&config)
+            .with_context(|| format!("创建离线识别器失败：{}", dir.display()))?;
+        Ok(Self { recognizer })
+    }
+
+    pub fn transcribe(&self, sample_rate: u32, samples: &[f32]) -> String {
+        let stream = self.recognizer.create_stream();
+        stream.accept_waveform(sample_rate as i32, samples);
+        self.recognizer.decode(&stream);
+        stream
+            .get_result()
+            .map(|r| r.text.trim().to_string())
+            .unwrap_or_default()
     }
 }
