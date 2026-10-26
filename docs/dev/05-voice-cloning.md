@@ -33,9 +33,19 @@ curl -L -o vocos_24khz.onnx \
 
 ## 当前状态（本机）
 
-- 参考音：`$GABTWIN_HOME/tts/reference.wav`（talk.mp3 开头 6 秒），文字在同目录 `reference.txt`；
+- 音色：`talk-dense`（talk.mp3 第 3.8–8.8 s，5 秒密集语音）；
+- 参考音：`$GABTWIN_HOME/tts/reference.wav`，文字在同目录 `reference.txt`；
 - 有参考音时应用**自动优先用 ZipVoice**，否则回退 Matcha；
-- 实测首音 **3.1 s**，长句 RTF 0.6–1.0（随机器负载波动）。
+- 实测首音 **3–6 s**、长句 RTF 0.6–1.6，**随机器负载波动很大**（关闭 ComfyUI 等重负载会明显变快）。
+
+切换音色：
+
+```bash
+./scripts/gabtwin-voice.sh list
+./scripts/gabtwin-voice.sh talk        # talk.mp3 开头 6 秒
+./scripts/gabtwin-voice.sh talk2       # talk2.mov 开头 6 秒
+./scripts/gabtwin-voice.sh talk-dense  # talk.mp3 3.8–8.8 秒（当前）
+```
 
 ## 用法
 
