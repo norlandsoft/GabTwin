@@ -64,6 +64,14 @@ struct Args {
     #[arg(long, default_value_t = 50)]
     chunk_ms: u32,
 
+    /// 用 modified_beam_search 解码（略准，略慢）
+    #[arg(long)]
+    beam: bool,
+
+    /// 会话开始前喂多少毫秒静音做预热（默认 500）
+    #[arg(long, default_value_t = 150)]
+    warmup_ms: u32,
+
     /// 把事件写成 JSONL
     #[arg(long)]
     jsonl: Option<PathBuf>,
@@ -105,6 +113,8 @@ fn main() -> Result<()> {
     cfg.asr.endpoint_silence_s = args.endpoint;
     cfg.onset_rms = args.onset;
     cfg.chunk_ms = args.chunk_ms;
+    cfg.asr.beam_search = args.beam;
+    cfg.warmup_ms = args.warmup_ms;
     if let Some(device) = &args.device {
         cfg.capture.device_name = Some(device.clone());
     }

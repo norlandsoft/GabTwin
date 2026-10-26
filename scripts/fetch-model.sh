@@ -8,9 +8,11 @@
 #   - 每个文件校验 sha256，校验不过就重下，不把坏文件留给识别器。
 #
 # 用法：
-#   ./scripts/fetch-model.sh                  # 下载全部
-#   ./scripts/fetch-model.sh zipformer-zh     # 只下大模型（167 MB）
-#   ./scripts/fetch-model.sh small-ctc        # 只下 small-CTC（26 MB）
+#   ./scripts/fetch-model.sh                  # 下载默认模型（multilingual，340 MB）
+#   ./scripts/fetch-model.sh zipformer-zh     # 中文大模型（167 MB）
+#   ./scripts/fetch-model.sh small-ctc        # 中文 small-CTC（26 MB，省 CPU）
+#   ./scripts/fetch-model.sh bilingual        # 中英双语（198 MB）
+#   ./scripts/fetch-model.sh multilingual     # 九语含中英（340 MB）
 #   ./scripts/fetch-model.sh --list           # 看有哪些
 #   ./scripts/fetch-model.sh --check          # 只校验已下载的文件
 #
@@ -29,12 +31,14 @@ GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
-MODELS="zipformer-zh small-ctc"
+MODELS="zipformer-zh small-ctc bilingual multilingual"
 
 repo_of() {
   case "$1" in
     zipformer-zh) echo "csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30" ;;
     small-ctc) echo "csukuangfj/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01" ;;
+    bilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
+    multilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
     *) return 1 ;;
   esac
 }
@@ -43,6 +47,8 @@ dir_of() {
   case "$1" in
     zipformer-zh) echo "streaming-zipformer-zh-int8-2025-06-30" ;;
     small-ctc) echo "streaming-zipformer-small-ctc-zh-int8-2025-04-01" ;;
+    bilingual) echo "streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
+    multilingual) echo "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
   esac
 }
 
@@ -64,12 +70,31 @@ bbpe.model:503204e0690eff065e30d0e01898c9ab06d0e6dc376a741eb6846198f95b2f82
 tokens.txt:6fed8c6c248516f38e7faa19404b57413e8ce259f1cbc1fa4aebc86eac32fdfd
 EOF
       ;;
+    bilingual)
+      cat <<'EOF'
+encoder-epoch-99-avg-1.int8.onnx:8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b
+decoder-epoch-99-avg-1.int8.onnx:1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992e5f63dc2e273cc4fa
+joiner-epoch-99-avg-1.int8.onnx:1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0
+tokens.txt:a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3
+bpe.model:bcae393dbc5611be5ffa4c7ae0841558978a5a4f484008cb9dff3a2cc97ebe01
+EOF
+      ;;
+    multilingual)
+      cat <<'EOF'
+encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx:f9001ed7a9e46d0294438c1a30cd7c72d1cc4bdd4e7880edbcda36f67081e32e
+decoder-epoch-75-avg-11-chunk-16-left-128.onnx:7ebc63f34b21c8efb4a41a5a2eee7fe1448829ce0230ecc5369e67fc14d90d48
+joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx:db88e3172323551abaa99b91b18fb422a27ea4a834fd0db10389f9478816f917
+tokens.txt:784f24950f6bcce1b0021035632dd60fd4617ecd8ca0581ab57d7b39d77ba5ab
+bpe.model:027731f33cff7266f2878c6fb7e478cf4af983962e311bb565112792794c13cd
+EOF
+      ;;
   esac
 }
 
 wavs_of() {
   case "$1" in
     zipformer-zh) echo "0.wav 1.wav" ;;
+    multilingual) echo "zh.wav en.wav" ;;
     *) echo "" ;;
   esac
 }
@@ -198,13 +223,13 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
-    all|zipformer-zh|small-ctc) TARGET="$1"; shift ;;
+    all|zipformer-zh|small-ctc|bilingual|multilingual) TARGET="$1"; shift ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "$TARGET" ]]; then
-  TARGET=all
+  TARGET=multilingual
 fi
 
 if [[ "$MODE" == check ]]; then

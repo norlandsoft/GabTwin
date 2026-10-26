@@ -51,6 +51,27 @@ function clearCaptions() {
   $("rtf").textContent = "—";
 }
 
+// 模型对英文常输出全大写；显示层收一下，日志里保留原文。
+// 常见缩写保留大写，纯英文片段首字母大写。
+const UPPER_KEEP = new Set([
+  "I", "IM", "ILL", "IVE", "OK", "API", "JSON", "USB", "AI", "CPU", "GPU",
+  "HTTP", "URL", "ID", "PC", "UI", "ASR", "TTS", "LLM", "SDK", "CLI",
+]);
+
+function tidy(text) {
+  let out = text.replace(/\b[A-Z][A-Z'’]*\b/g, (m) => {
+    const letters = m.replace(/['’]/g, "");
+    if (letters === "I") return m;
+    if (letters.length < 2) return m.toLowerCase();
+    if (UPPER_KEEP.has(letters)) return m;
+    return m.toLowerCase();
+  });
+  if (!/[\u4e00-\u9fff]/.test(out)) {
+    out = out.replace(/^[a-z]/, (c) => c.toUpperCase());
+  }
+  return out;
+}
+
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
@@ -79,7 +100,8 @@ function payloadOnsetMs() {
   return currentOnsetMs;
 }
 
-function renderPartial(text) {
+function renderPartial(raw) {
+  const text = tidy(raw);
   let node = captions.querySelector(".partial");
   if (!node) {
     node = document.createElement("p");
@@ -99,7 +121,8 @@ function renderPartial(text) {
   scrollToBottom();
 }
 
-function commitSegment(text) {
+function commitSegment(raw) {
+  const text = tidy(raw);
   const node = captions.querySelector(".partial");
   if (node) node.remove();
   const p = document.createElement("p");

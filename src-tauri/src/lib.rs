@@ -55,7 +55,14 @@ fn sample_wav_path() -> PathBuf {
     if let Some(path) = std::env::var_os("GABTWIN_SAMPLE_WAV") {
         return PathBuf::from(path);
     }
-    model_dir().join("test_wavs").join("0.wav")
+    let dir = model_dir().join("test_wavs");
+    for name in ["0.wav", "zh.wav"] {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    dir.join("0.wav")
 }
 
 /// 起一轮会话。会话线程自己持有 cpal 的 Stream（它在 macOS 上不是 Send）。

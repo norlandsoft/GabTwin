@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub use gabtwin_audio::{input_devices, DeviceInfo};
 
-pub const MODEL_DIR_NAME: &str = "streaming-zipformer-zh-int8-2025-06-30";
+pub const MODEL_DIR_NAME: &str = "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10";
 
 /// GabTwin 的根目录。`GABTWIN_HOME` 可覆盖（测试、离线部署）。
 pub fn gabtwin_home() -> PathBuf {
@@ -86,6 +86,12 @@ pub struct SessionConfig {
     pub chunk_ms: u32,
     /// 起始点判定阈值（RMS）。低于它视为静音。
     pub onset_rms: f32,
+    /// 会话开始时先喂多少毫秒静音给识别器做预热。
+    /// 流式模型没有这段热身时，用户开口的第一个词容易被吃掉。
+    pub warmup_ms: u32,
+    /// 至少要有这么多毫秒的真实静音，才允许模型定稿一句话。
+    /// 否则模型会被预热静音骗到，在没有停顿的地方断句。
+    pub min_silence_ms: u32,
 }
 
 impl SessionConfig {
@@ -95,6 +101,8 @@ impl SessionConfig {
             asr: AsrConfig::new(model_dir),
             chunk_ms: 50,
             onset_rms: 0.01,
+            warmup_ms: 150,
+            min_silence_ms: 250,
         }
     }
 }
@@ -152,6 +160,7 @@ impl Stats {
     fn on_update<F: FnMut(SessionEvent)>(&mut self, update: AsrUpdate, sink: &mut F) {
         match update {
             AsrUpdate::Partial(text) => {
+                let text = strip_leading_filler(&text);
                 let onset_ms = self
                     .speech_start
                     .map(|t| t.elapsed().as_millis() as u64)
@@ -171,6 +180,7 @@ impl Stats {
                 });
             }
             AsrUpdate::Segment(text) => {
+                let text = strip_leading_filler(&text);
                 let onset_ms = self
                     .speech_start
                     .map(|t| t.elapsed().as_millis() as u64)
@@ -240,6 +250,7 @@ where
 
     let sr = capture.sample_rate;
     let channels = capture.channels as usize;
+    warmup(&mut asr, sr, cfg.warmup_ms);
     sink(SessionEvent::Device {
         name: capture.device_name.clone(),
         sample_rate: sr,
@@ -280,7 +291,7 @@ where
             }
 
             let tick = Instant::now();
-            let updates = asr.accept(sr, &mono);
+            let updates = asr.accept(sr, &mono, stats.silence_ms >= cfg.min_silence_ms as u64);
             stats.proc_time += tick.elapsed();
             for update in updates {
                 stats.on_update(update, &mut sink);
@@ -328,6 +339,7 @@ where
     });
 
     let frames_per_chunk = (sr as u64 * cfg.chunk_ms as u64 / 1000).max(160) as usize;
+    warmup(&mut asr, sr, cfg.warmup_ms);
     let mut stats = Stats::new(sr);
     let started = Instant::now();
     let mut fed: u64 = 0;
@@ -348,7 +360,7 @@ where
         stats.on_audio(chunk, level, cfg.onset_rms);
         sink(SessionEvent::Level { rms: level });
         let tick = Instant::now();
-        let updates = asr.accept(sr, chunk);
+        let updates = asr.accept(sr, chunk, stats.silence_ms >= cfg.min_silence_ms as u64);
         stats.proc_time += tick.elapsed();
         for update in updates {
             stats.on_update(update, &mut sink);
@@ -366,7 +378,7 @@ where
         }
         stats.on_silence(chunk.len());
         let tick = Instant::now();
-        let updates = asr.accept(sr, chunk);
+        let updates = asr.accept(sr, chunk, stats.silence_ms >= cfg.min_silence_ms as u64);
         stats.proc_time += tick.elapsed();
         for update in updates {
             stats.on_update(update, &mut sink);
@@ -382,6 +394,29 @@ where
         state: "idle".into(),
     });
     Ok(())
+}
+
+/// 某些模型在长静音后会多吐一个语气词（"嗯"/"啊"）。它通常不是用户说的，
+/// 在显示与落账前去掉，避免每条都带一个"嗯"。
+fn strip_leading_filler(text: &str) -> String {
+    for filler in ["嗯", "啊", "哦", "呃", "唉"] {
+        if let Some(rest) = text.strip_prefix(filler) {
+            if !rest.trim().is_empty() {
+                return rest.trim_start().to_string();
+            }
+        }
+    }
+    text.to_string()
+}
+
+/// 给识别器喂一段静音，让流式编码器先进入稳定状态。
+fn warmup(asr: &mut Asr, sample_rate: u32, ms: u32) {
+    if ms == 0 {
+        return;
+    }
+    let samples = (sample_rate as u64 * ms as u64 / 1000) as usize;
+    let silence = vec![0.0f32; samples];
+    let _ = asr.accept(sample_rate, &silence, false);
 }
 
 fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {

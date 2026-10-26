@@ -17,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
-MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_HOME/models/streaming-zipformer-zh-int8-2025-06-30}"
+MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_HOME/models/streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10}"
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
 LOG_DIR="$GABTWIN_HOME/logs"
@@ -60,8 +60,9 @@ if [[ -n "$existing" ]]; then
 fi
 
 # 2. 模型检查（app 里也有检查，这里提前给出可执行的下一步）
-if [[ ! -f "$MODEL_DIR/tokens.txt" ]] ||
-  { [[ ! -f "$MODEL_DIR/encoder.int8.onnx" ]] && [[ ! -f "$MODEL_DIR/model.int8.onnx" ]]; }; then
+shopt -s nullglob
+onnx_files=("$MODEL_DIR"/encoder*.onnx "$MODEL_DIR"/model*.onnx)
+if [[ ! -f "$MODEL_DIR/tokens.txt" ]] || [[ ${#onnx_files[@]} -eq 0 ]]; then
   echo "模型缺失：$MODEL_DIR" >&2
   echo "先运行：./scripts/fetch-model.sh" >&2
   exit 2

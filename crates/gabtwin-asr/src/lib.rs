@@ -26,6 +26,10 @@ pub struct AsrConfig {
     /// 句尾静音多久算一句话结束（秒）。
     pub endpoint_silence_s: f32,
     pub kind: AsrKind,
+    /// 用 modified_beam_search（比 greedy 略准、略慢）。
+    pub beam_search: bool,
+    /// beam search 的活跃路径数。
+    pub max_active_paths: i32,
 }
 
 impl AsrConfig {
@@ -35,13 +39,34 @@ impl AsrConfig {
             num_threads: 2,
             endpoint_silence_s: 0.8,
             kind: AsrKind::Auto,
+            beam_search: false,
+            max_active_paths: 4,
         }
     }
 }
 
-/// 在目录里按顺序找第一个存在的文件。
-fn pick(dir: &std::path::Path, names: &[&str]) -> Option<PathBuf> {
-    names.iter().map(|n| dir.join(n)).find(|p| p.is_file())
+/// 在目录里找指定前缀的 .onnx；有 int8 版本优先。
+/// 兼容 `encoder-epoch-99-avg-1.int8.onnx` 这类命名。
+fn pick_onnx(dir: &std::path::Path, prefix: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("onnx"))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(prefix))
+                .unwrap_or(false)
+        })
+        .collect();
+    candidates.sort();
+    candidates
+        .iter()
+        .find(|path| path.to_string_lossy().contains(".int8."))
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
 }
 
 /// 一次增量识别结果。
@@ -70,10 +95,10 @@ impl Asr {
             );
         }
 
-        let encoder = pick(dir, &["encoder.int8.onnx", "encoder.onnx"]);
-        let decoder = pick(dir, &["decoder.int8.onnx", "decoder.onnx"]);
-        let joiner = pick(dir, &["joiner.int8.onnx", "joiner.onnx"]);
-        let ctc = pick(dir, &["model.int8.onnx", "model.onnx"]);
+        let encoder = pick_onnx(dir, "encoder");
+        let decoder = pick_onnx(dir, "decoder");
+        let joiner = pick_onnx(dir, "joiner");
+        let ctc = pick_onnx(dir, "model");
 
         let kind = match cfg.kind {
             AsrKind::Auto => {
@@ -121,7 +146,12 @@ impl Asr {
         config.rule1_min_trailing_silence = cfg.endpoint_silence_s;
         config.rule2_min_trailing_silence = 1.2;
         config.rule3_min_utterance_length = 20.0;
-        config.decoding_method = Some("greedy_search".to_string());
+        if cfg.beam_search {
+            config.decoding_method = Some("modified_beam_search".to_string());
+            config.max_active_paths = cfg.max_active_paths.max(1);
+        } else {
+            config.decoding_method = Some("greedy_search".to_string());
+        }
 
         let recognizer = OnlineRecognizer::create(&config)
             .with_context(|| format!("创建流式识别器失败：{}", dir.display()))?;
@@ -135,7 +165,15 @@ impl Asr {
     }
 
     /// 传入任意采样率的单声道音频；sherpa-onnx 内部重采样到 16 kHz。
-    pub fn accept(&mut self, sample_rate: u32, samples: &[f32]) -> Vec<AsrUpdate> {
+    ///
+    /// `allow_endpoint`：只有确实检测到一段真实静音时才允许定稿。
+    /// 模型自己算出的 trailing silence 会被预热的静音骗到，在没有停顿的地方断句。
+    pub fn accept(
+        &mut self,
+        sample_rate: u32,
+        samples: &[f32],
+        allow_endpoint: bool,
+    ) -> Vec<AsrUpdate> {
         let mut out = Vec::new();
         self.stream.accept_waveform(sample_rate as i32, samples);
 
@@ -153,7 +191,7 @@ impl Asr {
                 out.push(AsrUpdate::Partial(text));
             }
 
-            if self.recognizer.is_endpoint(&self.stream) {
+            if allow_endpoint && self.recognizer.is_endpoint(&self.stream) {
                 let final_text = self
                     .recognizer
                     .get_result(&self.stream)
