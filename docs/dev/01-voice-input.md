@@ -67,14 +67,23 @@ cargo run -p gabtwin-probe -- --wav ".../test_wavs/0.wav" --realtime
 # 真实麦克风，10 秒
 cargo run -p gabtwin-probe -- --mic --seconds 10 --verbose
 
-# 桌面应用
-cargo run -p gabtwin-app
+# 桌面应用（自动编译、后台运行、防重复启动）
+./scripts/gabtwin-start.sh
+./scripts/gabtwin-stop.sh
 
 # 不点按钮也能自动跑一遍示例（用于截图 / 回归）
-GABTWIN_AUTOREPLAY=1 cargo run -p gabtwin-app
+GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 ```
 
-环境变量：
+启动脚本的行为：
+
+- `gabtwin-start.sh`：检查模型 → `cargo build -p gabtwin-app` → `nohup` 后台启动 →
+  写 `$GABTWIN_HOME/gabtwin-app.pid` → 日志追加到 `$GABTWIN_HOME/logs/app.log`。
+  已经在跑（包括手动启动的实例）就直接退出，不会起第二个。
+- `gabtwin-stop.sh`：先读 PID 文件；没有记录就按可执行文件名找实例。先 TERM，
+  5 秒内没退出再 KILL。
+
+环境变量（脚本原样传给应用）：
 
 | 变量 | 作用 |
 |---|---|

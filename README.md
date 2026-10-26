@@ -26,16 +26,15 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 
 ```bash
 ./scripts/fetch-model.sh       # 下载模型（167 MB，国内镜像/直连/并行/校验）
+./scripts/gabtwin-start.sh     # 启动桌面应用（自动编译、后台、带 PID 与日志）
+./scripts/gabtwin-stop.sh      # 停止
 
-# 无麦克风：用模型自带 WAV 跑识别
+# 命令行验证（不打开窗口）
 cargo run -p gabtwin-probe -- --wav "$HOME/Library/Application Support/GabTwin/models/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav"
-
-# 真实麦克风
 cargo run -p gabtwin-probe -- --mic --seconds 10
-
-# 桌面应用（开始聆听 / 停止 / 示例音频）
-cargo run -p gabtwin-app
 ```
+
+启动日志在 `~/Library/Application Support/GabTwin/logs/app.log`。
 
 模型需要先下载，见 [docs/dev/01](docs/dev/01-voice-input.md)。
 
