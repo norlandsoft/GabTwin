@@ -1,10 +1,11 @@
 use chrono::Local;
+use gabtwin_llm::{spoken_system_prompt, Dialog, LlmClient, LlmConfig};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
     run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -30,6 +31,44 @@ fn install_signal_logging() {
             std::process::exit(0);
         }
     });
+}
+
+struct LlmState {
+    client: Option<LlmClient>,
+    dialog: Mutex<Dialog>,
+    turn: AtomicU64,
+    cancel: Mutex<Arc<AtomicBool>>,
+}
+
+impl LlmState {
+    fn new() -> Self {
+        let client = match LlmConfig::from_env() {
+            Some(cfg) => {
+                let model = cfg.model.clone();
+                match LlmClient::new(cfg) {
+                    Ok(client) => {
+                        log(format!("LLM 就绪：{model}"));
+                        Some(client)
+                    }
+                    Err(err) => {
+                        log(format!("LLM 初始化失败：{err:#}"));
+                        None
+                    }
+                }
+            }
+            None => {
+                log("未配置 DEEPSEEK_API_KEY，只显示识别结果");
+                None
+            }
+        };
+        let persona = "你是 GabTwin，一个温和、好奇、话不多的中文闲聊伙伴。";
+        Self {
+            client,
+            dialog: Mutex::new(Dialog::new(spoken_system_prompt(persona))),
+            turn: AtomicU64::new(0),
+            cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -116,6 +155,7 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     let running = state.running.clone();
     std::thread::spawn(move || {
         let emit_target = app_handle.clone();
+        let llm_app = app_handle.clone();
         let mut sink = move |event: SessionEvent| {
             if matches!(event, SessionEvent::Level { .. }) {
                 let _ = emit_target.emit("session-event", &event);
@@ -124,6 +164,9 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             log(format!("{event:?}"));
             if let Err(err) = emit_target.emit("session-event", &event) {
                 log(format!("emit 失败：{err}"));
+            }
+            if let SessionEvent::Segment { text, .. } = &event {
+                start_llm_turn(&llm_app, text.clone());
             }
         };
 
@@ -153,6 +196,86 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     Ok(())
 }
 
+/// 一句用户话定稿后，发起一轮流式回复。新一轮会取消上一轮。
+fn start_llm_turn(app: &AppHandle, text: String) {
+    let state = app.state::<LlmState>();
+    let Some(client) = state.client.clone() else {
+        let _ = app.emit(
+            "llm-error",
+            serde_json::json!({
+                "turn_id": 0,
+                "message": "未配置 DEEPSEEK_API_KEY（或 GABTWIN_LLM_KEY），只显示识别结果",
+            }),
+        );
+        return;
+    };
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    *state.cancel.lock().unwrap() = cancel.clone();
+    let turn_id = state.turn.fetch_add(1, Ordering::SeqCst) + 1;
+
+    let messages = {
+        let mut dialog = state.dialog.lock().unwrap();
+        dialog.push_user(&text);
+        dialog.messages()
+    };
+
+    let _ = app.emit("llm-thinking", serde_json::json!({ "turn_id": turn_id }));
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let emit_target = app_handle.clone();
+        let result = client.stream_chat(&messages, &cancel, |delta| {
+            let _ = emit_target.emit(
+                "llm-delta",
+                serde_json::json!({ "turn_id": turn_id, "text": delta }),
+            );
+        });
+
+        match result {
+            Ok(r) if r.cancelled => {
+                let _ = app_handle.emit("llm-cancelled", serde_json::json!({ "turn_id": turn_id }));
+            }
+            Ok(r) if !r.text.trim().is_empty() => {
+                if let Some(state) = app_handle.try_state::<LlmState>() {
+                    state.dialog.lock().unwrap().push_assistant(r.text.clone());
+                }
+                let _ = app_handle.emit(
+                    "llm-done",
+                    serde_json::json!({
+                        "turn_id": turn_id,
+                        "text": r.text,
+                        "first_token_ms": r.first_token_ms,
+                        "total_ms": r.total_ms,
+                    }),
+                );
+            }
+            Ok(_) => {
+                let _ = app_handle.emit(
+                    "llm-error",
+                    serde_json::json!({ "turn_id": turn_id, "message": "模型没有返回内容" }),
+                );
+            }
+            Err(err) => {
+                log(format!("LLM 失败：{err:#}"));
+                let _ = app_handle.emit(
+                    "llm-error",
+                    serde_json::json!({ "turn_id": turn_id, "message": format!("{err:#}") }),
+                );
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn llm_status(app: AppHandle) -> serde_json::Value {
+    let state = app.state::<LlmState>();
+    serde_json::json!({
+        "configured": state.client.is_some(),
+        "model": state.client.as_ref().map(|c| c.model().to_string()),
+        "turns": state.dialog.lock().unwrap().len() / 2,
+    })
+}
+
 #[tauri::command]
 fn list_devices() -> Result<Vec<DeviceInfo>, String> {
     input_devices().map_err(|e| format!("{e:#}"))
@@ -167,6 +290,9 @@ fn start_listening(app: AppHandle) -> Result<(), String> {
 fn stop_listening(app: AppHandle) {
     if let Some(state) = app.try_state::<SessionState>() {
         state.stop.lock().unwrap().store(true, Ordering::SeqCst);
+    }
+    if let Some(llm) = app.try_state::<LlmState>() {
+        llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
     }
 }
 
@@ -191,12 +317,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(SessionState::default())
+        .manage(LlmState::new())
         .invoke_handler(tauri::generate_handler![
             list_devices,
             start_listening,
             stop_listening,
             replay_sample,
-            app_info
+            app_info,
+            llm_status
         ])
         .setup(|app| {
             // 验证用：不点按钮也能自动回放示例音频（截图 / 回归用）

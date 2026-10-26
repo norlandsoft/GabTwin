@@ -84,6 +84,8 @@ UI → Rust：`start_listening`、`stop_listening`、`interrupt`、`set_device`�
 - Tauri 的事件名不允许点号，所以是 `session-event` 而不是 `session.event`。
 - **播放时钟尚未引入**（还没有音频输出）；接 TTS 时必须补，否则口型会跟"包到达时间"漂移。
 - 端点延迟按**音频时间**计（最后一个有声帧之后的静音时长），这样实时与回放同一口径。
+- **LLM 事件**（`llm-thinking` / `llm-delta` / `llm-done` / `llm-cancelled` / `llm-error`）
+  由应用层直接发；每句定稿（`segment`）触发一轮，`turn_id` 防止旧流污染新回合。
 
 ## 会话状态机
 

@@ -1,0 +1,12 @@
+[package]
+name = "gabtwin-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "LLM 流式客户端：SSE、首 token 计时、取消、上下文裁剪"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { version = "0.12", features = ["blocking", "json"] }

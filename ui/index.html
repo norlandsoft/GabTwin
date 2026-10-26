@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GabTwin · 语音输入验证</title>
+    <title>GabTwin · 语音对话</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body data-state="idle">
@@ -12,7 +12,7 @@
         <div class="brand">
           <span class="mark"></span>
           <span class="name">GabTwin</span>
-          <span class="tag">语音输入验证</span>
+          <span class="tag">语音对话</span>
         </div>
         <div class="status" data-state="idle">
           <span class="pulse"></span>
@@ -20,9 +20,10 @@
         </div>
       </header>
 
-      <main class="stage">
-        <div class="hint" id="hint">按「开始聆听」，然后说话。文字会随着你说，边出现。</div>
-        <div class="captions" id="captions"></div>
+      <main class="stage" id="stage">
+        <div class="hint" id="hint">按「开始聆听」，然后说话。它会在你说完后接话。</div>
+        <div class="conversation" id="conversation"></div>
+        <div class="live" id="live"></div>
       </main>
 
       <footer class="dock">
@@ -31,6 +32,7 @@
           <div class="metrics">
             <div class="metric"><span class="k">首字</span><span class="v" id="first">—</span></div>
             <div class="metric"><span class="k">静音</span><span class="v" id="endpoint">—</span></div>
+            <div class="metric"><span class="k">首 token</span><span class="v" id="ttft">—</span></div>
             <div class="metric"><span class="k">RTF</span><span class="v" id="rtf">—</span></div>
           </div>
           <div class="controls">
@@ -41,7 +43,7 @@
         </div>
         <div class="foot">
           <span id="device">本地识别 · 音频不出本机</span>
-          <span id="model" class="dim"></span>
+          <span id="llm" class="dim">—</span>
         </div>
       </footer>
     </div>

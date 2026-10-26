@@ -20,3 +20,4 @@ tauri = { version = "2", features = [] }
 chrono.workspace = true
 signal-hook.workspace = true
 gabtwin-session = { path = "../crates/gabtwin-session" }
+gabtwin-llm = { path = "../crates/gabtwin-llm" }

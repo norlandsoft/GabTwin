@@ -3,56 +3,68 @@ const invoke = tauri?.core?.invoke;
 const listen = tauri?.event?.listen;
 
 const $ = (id) => document.getElementById(id);
-const captions = $("captions");
+const stage = $("stage");
+const conversation = $("conversation");
+const live = $("live");
 const hint = $("hint");
 
 let lastPartial = "";
-let running = false;
+let current = null; // { id, el, text }
+let llmConfigured = false;
+let llmMissingShown = false;
+let audioState = "idle";
 
 const STATE_TEXT = {
   idle: "待机",
   loading: "载入模型…",
   listening: "聆听中",
   replaying: "回放中",
+  thinking: "思考中",
+  replying: "回复中",
   error: "错误",
 };
 
-const HINT_TEXT = {
-  idle: "按「开始聆听」，然后说话。文字会随着你说，边出现。",
-  loading: "正在载入识别模型…",
-  listening: "说吧，我在听。",
-  replaying: "回放示例音频（不需要麦克风）…",
-  error: "",
-};
+const ACTIVE = new Set(["loading", "listening", "replaying", "thinking", "replying"]);
 
 function setStatus(state, message) {
   const el = document.querySelector(".status");
   el.dataset.state = state;
   $("statusText").textContent = message || STATE_TEXT[state] || state;
+  document.body.dataset.state = state;
 
-  hint.textContent = message && state === "error" ? message : HINT_TEXT[state] || "";
-  hint.classList.toggle("error", state === "error");
-  hint.style.display = hint.textContent ? "" : "none";
-  if (state === "idle" && captions.children.length > 0) {
-    hint.style.display = "none";
-  }
-
-  running = state === "loading" || state === "listening" || state === "replaying";
+  const running = ACTIVE.has(state);
   $("start").disabled = running;
   $("stop").disabled = !running;
   $("sample").disabled = running;
+
+  if (state === "error") {
+    hint.textContent = message || "出错了";
+    hint.classList.add("error");
+    hint.style.display = "";
+  }
 }
 
-function clearCaptions() {
-  captions.innerHTML = "";
+function syncHint() {
+  if (conversation.children.length > 0) {
+    hint.style.display = "none";
+  }
+}
+
+function clearAll() {
+  conversation.innerHTML = "";
+  live.innerHTML = "";
   lastPartial = "";
+  current = null;
   $("first").textContent = "—";
   $("endpoint").textContent = "—";
+  $("ttft").textContent = "—";
   $("rtf").textContent = "—";
+  hint.classList.remove("error");
+  hint.textContent = "按「开始聆听」，然后说话。它会在你说完后接话。";
+  hint.style.display = "";
 }
 
 // 模型对英文常输出全大写；显示层收一下，日志里保留原文。
-// 常见缩写保留大写，纯英文片段首字母大写。
 const UPPER_KEEP = new Set([
   "I", "IM", "ILL", "IVE", "OK", "API", "JSON", "USB", "AI", "CPU", "GPU",
   "HTTP", "URL", "ID", "PC", "UI", "ASR", "TTS", "LLM", "SDK", "CLI",
@@ -90,56 +102,66 @@ function commonPrefix(a, b) {
 }
 
 function scrollToBottom() {
-  const stage = document.querySelector(".stage");
   stage.scrollTop = stage.scrollHeight;
 }
 
-let currentOnsetMs = 0;
-
-function payloadOnsetMs() {
-  return currentOnsetMs;
-}
-
-function renderPartial(raw) {
-  const text = tidy(raw);
-  let node = captions.querySelector(".partial");
-  if (!node) {
-    node = document.createElement("p");
-    node.className = "partial";
-    captions.appendChild(node);
-  }
-  const stable = commonPrefix(lastPartial, text);
-  const tail = text.slice(stable.length);
-  node.innerHTML =
-    `<span class="stable">${escapeHtml(stable)}</span>` +
-    `<span class="tail">${escapeHtml(tail)}</span>`;
-  lastPartial = text;
-  hint.style.display = "none";
-  if ($("first").textContent === "—") {
-    $("first").textContent = `${payloadOnsetMs()} ms`;
-  }
-  scrollToBottom();
-}
-
-function commitSegment(raw) {
-  const text = tidy(raw);
-  const node = captions.querySelector(".partial");
-  if (node) node.remove();
+function appendUser(text) {
   const p = document.createElement("p");
-  p.className = "final";
-  p.textContent = text;
-  captions.appendChild(p);
-  lastPartial = "";
+  p.className = "turn user";
+  p.textContent = tidy(text);
+  conversation.appendChild(p);
+  syncHint();
   scrollToBottom();
 }
 
-function handle(event) {
-  const payload = event.payload || {};
+function startAssistant(turnId) {
+  const p = document.createElement("p");
+  p.className = "turn assistant streaming";
+  conversation.appendChild(p);
+  current = { id: turnId, el: p, text: "" };
+  syncHint();
+  scrollToBottom();
+}
+
+function finishCurrent() {
+  if (current) {
+    current.el.classList.remove("streaming");
+    current = null;
+  }
+}
+
+function renderLive(raw, onsetMs) {
+  const text = tidy(raw);
+  const stable = commonPrefix(lastPartial, text);
+  live.innerHTML =
+    `<span>${escapeHtml(stable)}</span>` +
+    `<span class="tail">${escapeHtml(text.slice(stable.length))}</span>`;
+  lastPartial = text;
+  if ($("first").textContent === "—" && onsetMs != null) {
+    $("first").textContent = `${onsetMs} ms`;
+  }
+  scrollToBottom();
+}
+
+function onSessionEvent(payload) {
   switch (payload.kind) {
     case "state": {
       const state = payload.state;
-      if (state === "loading") clearCaptions();
-      setStatus(state);
+      if (state === "offline_ready") break;
+      if (state === "loading") {
+        clearAll();
+        audioState = "loading";
+        setStatus("loading");
+      } else if (state === "listening") {
+        audioState = "listening";
+        setStatus("listening");
+      } else if (state === "replaying") {
+        audioState = "replaying";
+        setStatus("replaying");
+      } else if (state === "idle") {
+        audioState = "idle";
+        setStatus(current ? "replying" : "idle");
+      }
       break;
     }
     case "device":
@@ -149,12 +171,18 @@ function handle(event) {
       $("level").style.width = `${Math.min(100, payload.rms * 380)}%`;
       break;
     case "partial":
-      currentOnsetMs = payload.onset_ms || 0;
-      renderPartial(payload.text);
+      renderLive(payload.text, payload.onset_ms);
       break;
     case "segment":
-      commitSegment(payload.text);
+      appendUser(payload.text);
+      live.innerHTML = "";
+      lastPartial = "";
       $("endpoint").textContent = `${payload.latency_ms} ms`;
+      if (llmConfigured) {
+        setStatus("thinking");
+      } else {
+        setStatus(audioState === "replaying" ? "replaying" : "listening");
+      }
       break;
     case "metrics":
       if (payload.first_partial_ms != null) {
@@ -173,6 +201,63 @@ function handle(event) {
   }
 }
 
+function onLlmThinking(payload) {
+  if (current) {
+    current.el.remove();
+    current = null;
+  }
+  startAssistant(payload.turn_id);
+  setStatus("thinking");
+}
+
+function onLlmDelta(payload) {
+  if (!current || payload.turn_id !== current.id) return;
+  current.text += payload.text;
+  current.el.textContent = current.text;
+  setStatus("replying");
+  scrollToBottom();
+}
+
+function onLlmDone(payload) {
+  if (!current || payload.turn_id !== current.id) return;
+  current.el.classList.remove("streaming");
+  current.el.textContent = payload.text;
+  if (payload.first_token_ms != null) {
+    $("ttft").textContent = `${payload.first_token_ms} ms`;
+  }
+  current = null;
+  setStatus(audioState === "idle" ? "idle" : audioState);
+  scrollToBottom();
+}
+
+function onLlmError(payload) {
+  if (payload.turn_id === 0) {
+    if (!llmMissingShown) {
+      llmMissingShown = true;
+      $("llm").textContent = "未配置 LLM key";
+      hint.style.display = "";
+      hint.classList.add("error");
+      hint.textContent = payload.message;
+    }
+    return;
+  }
+  if (current && payload.turn_id === current.id) {
+    current.el.classList.remove("streaming");
+    current.el.classList.add("error");
+    current.el.textContent = payload.message;
+    current = null;
+    setStatus(audioState === "idle" ? "idle" : audioState);
+  }
+}
+
+function onLlmCancelled(payload) {
+  if (current && payload.turn_id === current.id) {
+    current.el.remove();
+    current = null;
+  }
+  setStatus(audioState === "idle" ? "idle" : audioState);
+}
+
 async function guard(promise) {
   try {
     await promise;
@@ -184,13 +269,16 @@ async function guard(promise) {
 if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
-  listen("session-event", handle).catch(() => {});
+  listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  listen("llm-thinking", (e) => onLlmThinking(e.payload || {}));
+  listen("llm-delta", (e) => onLlmDelta(e.payload || {}));
+  listen("llm-done", (e) => onLlmDone(e.payload || {}));
+  listen("llm-error", (e) => onLlmError(e.payload || {}));
+  listen("llm-cancelled", (e) => onLlmCancelled(e.payload || {}));
 
   $("start").addEventListener("click", () => {
-    clearCaptions();
-    running = true;
-    $("start").disabled = true;
-    $("stop").disabled = false;
+    clearAll();
+    setStatus("loading");
     guard(invoke("start_listening"));
   });
 
@@ -200,17 +288,24 @@ if (!invoke) {
   });
 
   $("sample").addEventListener("click", () => {
-    clearCaptions();
-    running = true;
-    $("start").disabled = true;
-    $("stop").disabled = false;
+    clearAll();
+    setStatus("loading");
     guard(invoke("replay_sample"));
   });
 
+  invoke("llm_status")
+    .then((info) => {
+      llmConfigured = !!info.configured;
+      $("llm").textContent = info.configured ? `LLM ${info.model}` : "未配置 LLM key";
+      $("llm").title = info.configured
+        ? "每次定稿后自动发起一轮流式回复"
+        : "设置 DEEPSEEK_API_KEY 后重启应用";
+    })
+    .catch(() => {});
+
   invoke("app_info")
     .then((info) => {
-      $("model").textContent = info.model_dir;
-      $("model").title = info.model_dir;
+      $("device").title = info.model_dir;
     })
     .catch(() => {});
 

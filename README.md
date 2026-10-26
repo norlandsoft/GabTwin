@@ -4,8 +4,9 @@
 
 GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂、回答，并用一张会动嘴的脸看着你。
 
-**状态：M0.5 分项验证阶段。** 语音输入 + 实时字幕已跑通（本地流式识别，中英，首字约 0.25–0.55 s），
-其余分项按顺序验证中。
+**状态：M0.5 分项验证阶段。** 语音输入 + 实时字幕 + LLM 文字回复已跑通
+（本地流式识别，中英，首字约 0.25–0.55 s；句末 SenseVoice 定稿；回复流式逐字出）。
+TTS 与数字人还没接。
 
 ## 文档
 
@@ -21,10 +22,12 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 | [规划评审 2026-10](docs/reviews/2026-10-26-plan-review.md) | M0 评审意见、需先定的决定、M0' 建议 |
 | [dev/01 语音输入](docs/dev/01-voice-input.md) | 第一个分项验证：架构、模型、实测数字、限制 |
 | [dev/02 ASR 模型对照](docs/dev/02-asr-model-compare.md) | 大模型 vs small-CTC：CER、首字延迟、RTF |
+| [dev/03 LLM 接话](docs/dev/03-llm.md) | 句末触发、SSE 流式、取消、上下文预算、mock 验证 |
 
 ## 现在能跑
 
 ```bash
+export DEEPSEEK_API_KEY=sk-...  # 没有也能跑，只是不回话
 ./scripts/fetch-model.sh       # 下载默认 ASR 模型（流式 237 MB + 定稿 240 MB，国内镜像/直连/并行/校验）
 ./scripts/gabtwin-start.sh     # 启动桌面应用（自动编译、后台、带 PID 与日志）
 ./scripts/gabtwin-stop.sh      # 停止
