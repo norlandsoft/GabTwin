@@ -22,19 +22,20 @@ LLM 流式 delta
 
 | 项 | 值 |
 |---|---|
-| 模型 | `sherpa-onnx-vits-zh-ll`（中文 VITS，单音色女声） |
-| 体积 | model.onnx 121 MB + lexicon 0.4 MB + 4 个 FST |
+| 模型 | `matcha-icefall-zh-en`（中英 Matcha + vocos 16k 声码器） |
+| 体积 | model-steps-3 72 MB + vocos 54 MB + lexicon/FST |
 | 采样率 | 16 kHz（输出 48 kHz，线性重采样） |
-| 许可 | **待核**（社区贡献，基于 VITS-fast-fine-tuning，未标 license） |
-| 文本规则 | date / number / phone / new_heteronym 四个 FST |
+| 许可 | **待核**（来自 ModelScope `matcha_tts_zh_en_20251010`，未标 license） |
+| 文本规则 | date-zh / number-zh / phone-zh 三个 FST |
+| 备选 | VITS zh-ll（快、单音色、跳过英文词）；Kokoro v1.1（更自然但 RTF≈1，不可流式） |
 
 ## 实测（M1 Max）
 
 | 指标 | 值 |
 |---|---|
 | 模型加载 + 预热 | 约 0.3–1 s（启动时） |
-| 首句合成（6 字） | 400–440 ms |
-| **句末 → 第一个声音** | **575–609 ms**（mock LLM，不含真实网络） |
+| 首句合成（6 字） | **100 ms**（Matcha） |
+| **句末 → 第一个声音** | **278 ms**（mock LLM，不含真实网络） |
 | 首句播放 | 约 1 s 音频 |
 | RTF | 0.17–0.33 |
 | 输出 | 48 kHz，队列播放 |
@@ -45,7 +46,7 @@ LLM 流式 delta
 
 | 变量 | 作用 |
 |---|---|
-| `GABTWIN_TTS_MODEL_DIR` | TTS 模型目录（默认 `$GABTWIN_HOME/models/vits-zh-ll`） |
+| `GABTWIN_TTS_MODEL_DIR` | TTS 模型目录（默认 `$GABTWIN_HOME/models/matcha-zh-en`） |
 | `GABTWIN_ENGINE=streaming` | 只影响句末定稿，不影响 TTS |
 
 ## 单独验 TTS
@@ -62,16 +63,17 @@ afplay /tmp/tts.wav
 
 | 引擎 | 采样率 | 合成耗时 | RTF | 说明 |
 |---|---|---|---|---|
-| VITS zh-ll（当前默认） | 16 kHz | 780 ms | 0.27 | 快，但音色偏机械 |
-| Matcha zh-en | 16 kHz | 120–340 ms | 0.04–0.11 | 很快，中英混读；音色待你听 |
+| VITS zh-ll（备选） | 16 kHz | 780 ms | 0.27 | 快，但音色偏机械；英文词跳过 |
+| **Matcha zh-en（当前默认）** | 16 kHz | 100–340 ms | 0.04–0.11 | 很快，中英混读；音色待你听 |
 | Kokoro v1.1（sid 3） | 24 kHz | 3.7–4.0 s | ≈1.0 | 更自然，但**无法实时流式**，未采用 |
 
 试听：
 
 ```bash
-afplay /tmp/tts-vits-sample.wav     # VITS
-afplay /tmp/matcha-sample.wav       # Matcha
-afplay /tmp/kokoro-3.wav            # Kokoro
+afplay /tmp/tts-vits-sample.wav     # VITS（备选）
+afplay /tmp/matcha-sample.wav       # Matcha（当前默认）
+afplay /tmp/kokoro-3.wav            # Kokoro（更自然但太慢）
+afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 ```
 
 `Matcha` 的模型在 `~/Library/Application Support/GabTwin/models/matcha-zh-en/`；

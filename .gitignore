@@ -24,3 +24,6 @@ src-tauri/gen/
 # 系统
 .DS_Store
 *.log
+
+# TTS sidecar venv
+.venv-tts*/

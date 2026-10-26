@@ -292,3 +292,23 @@ SenseVoice 几乎全对且带标点，但它是离线模型。
 - 外放用户暂时不能语音插话（M2 补齐）；
 - 耳机用户获得完整打断体验；
 - 设备类型识别依赖 cpal 的 DeviceDescription（macOS 可用）。
+
+---
+
+## ADR-016 · 默认 TTS 改用 Matcha zh-en
+
+**背景**：VITS zh-ll 音色偏机械，且中文 lexicon 会跳过英文词（API、GabTwin），
+中英混读直接丢词。Kokoro 更自然但 CPU RTF ≈ 1.0，无法流式。
+
+**决定**：默认 TTS 改为 `matcha-icefall-zh-en`（Matcha + vocos 16k），
+VITS 保留为备选，Kokoro 留作离线/高质量场景。
+
+**理由**：
+- 首句合成 100 ms、句末到首音 278 ms（VITS 是 440/575 ms）；
+- 中英混读不丢英文词；
+- 体积 126 MB，仍在本机跑，不改变"音频不出本机"。
+
+**后果**：
+- 音色是否达标仍需人耳确认；不达标时的下一档是云 TTS 或 CosyVoice 2；
+- 权重许可未标（ModelScope），商用前必须确认；
+- 声码器在 GitHub release，下载较慢（脚本已带重试与哈希）。

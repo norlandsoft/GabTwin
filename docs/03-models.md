@@ -15,7 +15,7 @@
 | 端点 | smart-turn 类小模型 | 待定 | ONNX | 待核 | 可选，先用规则 |
 | LLM | DeepSeek（云） | — | HTTPS | 服务条款 | 默认 |
 | LLM 兜底 | Qwen3-4B/8B 4bit | 2–5 GB | MLX / llama.cpp | Apache-2.0（待核） | 未接 |
-| TTS（当前默认） | VITS zh-ll（sherpa-onnx） | 121 MB | sherpa-onnx | **待核**（社区贡献，未标 license） | **已验证**：首句 400–440 ms，16 kHz |
+| TTS（当前默认） | Matcha zh-en + vocos 16k | 126 MB | sherpa-onnx | **待核**（ModelScope，未标 license） | **已验证**：首句 100 ms，中英混读 |
 | TTS 轻量 | Piper 中文 | 60–100 MB/音色 | piper-rs | **音色各自不同** | 候选 |
 | TTS 轻量 | Kokoro 82M | ~300 MB | ONNX | Apache-2.0（待核） | 候选 |
 | TTS 高质量 | CosyVoice 2 0.5B | 1–2 GB | Python sidecar | 待核 | 后续 |

@@ -118,7 +118,7 @@ impl TtsState {
 fn tts_model_dir() -> PathBuf {
     std::env::var_os("GABTWIN_TTS_MODEL_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| gabtwin_home().join("models").join("vits-zh-ll"))
+        .unwrap_or_else(|| gabtwin_home().join("models").join("matcha-zh-en"))
 }
 
 fn start_tts_worker(

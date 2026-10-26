@@ -31,7 +31,7 @@ GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
-MODELS="zipformer-zh small-ctc bilingual multilingual paraformer sensevoice tts kokoro-zh"
+MODELS="zipformer-zh small-ctc bilingual multilingual paraformer sensevoice tts kokoro-zh matcha-zh-en"
 
 repo_of() {
   case "$1" in
@@ -43,6 +43,7 @@ repo_of() {
     sensevoice) echo "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
     tts) echo "csukuangfj/sherpa-onnx-vits-zh-ll" ;;
     kokoro-zh) echo "csukuangfj/kokoro-int8-multi-lang-v1_1" ;;
+    matcha-zh-en) echo "csukuangfj/matcha-icefall-zh-en" ;;
     *) return 1 ;;
   esac
 }
@@ -57,6 +58,7 @@ dir_of() {
     sensevoice) echo "sense-voice-zh-en-ja-ko-yue-2024-07-17" ;;
     tts) echo "vits-zh-ll" ;;
     kokoro-zh) echo "kokoro-int8-multi-lang-v1_1" ;;
+    matcha-zh-en) echo "matcha-zh-en" ;;
   esac
 }
 
@@ -85,6 +87,16 @@ decoder-epoch-99-avg-1.int8.onnx:1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992
 joiner-epoch-99-avg-1.int8.onnx:1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0
 tokens.txt:a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3
 bpe.model:bcae393dbc5611be5ffa4c7ae0841558978a5a4f484008cb9dff3a2cc97ebe01
+EOF
+      ;;
+    matcha-zh-en)
+      cat <<'EOF'
+model-steps-3.onnx:524286bf6cf11be74329ae1c682ac69e34d6860c2ea9fd1290319d561540b16a
+lexicon.txt:599efdcdaff4df2a123ce988c2cb90abcd59b919ef609ce36eb587d68b7ca2c0
+tokens.txt:77fee8e5e5dd96b3547119e6159292c648e99e065c54c97777722e3ce710b9a4
+date-zh.fst:eb8aa079ae3cb81d8f4404992f39d61a0cb990947512b5b8d1e54d1f6980e718
+number-zh.fst:743f402181fcfebf76cc2f0546b71fa26476e626fbe4e460fb7b4c3a7a8bd5bd
+phone-zh.fst:1ac2b6fa56b1442320c4de7db08353bab8963a2b57f365eebcdd3a2d3562f8d7
 EOF
       ;;
     kokoro-zh)
@@ -224,6 +236,29 @@ fetch_model() {
       || echo "  ! 示例音频下载失败（不影响识别）" >&2
   fi
 
+  if [[ "$model" == matcha-zh-en ]]; then
+    local vocoder="$dir/vocos-16khz-univ.onnx"
+    local want="b599142a1fb8ff03de3e84ac35ff537c619e56f4267a6fe894851a42844acf9e"
+    if [[ ! -f "$vocoder" ]] || [[ "$(sha "$vocoder")" != "$want" ]]; then
+      echo "  下载 vocoder（GitHub release，可能较慢）…"
+      if curl -fL --noproxy '*' -A "$UA" --retry 5 --retry-all-errors --retry-delay 3 \
+        -o "$vocoder.part" \
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx"; then
+        if [[ "$(sha "$vocoder.part")" == "$want" ]]; then
+          mv "$vocoder.part" "$vocoder"
+          echo "  ✓ vocos-16khz-univ.onnx"
+        else
+          echo "  ! vocoder 校验失败" >&2
+          rm -f "$vocoder.part"
+          fail=1
+        fi
+      else
+        echo "  ! vocoder 下载失败" >&2
+        fail=1
+      fi
+    fi
+  fi
+
   local wav
   for wav in $(wavs_of "$model"); do
     if [[ -s "$dir/test_wavs/$wav" ]]; then
@@ -276,14 +311,14 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
-    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer|sensevoice|tts|kokoro-zh) TARGET="$1"; shift ;;
+    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer|sensevoice|tts|kokoro-zh|matcha-zh-en) TARGET="$1"; shift ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "$TARGET" ]]; then
-  # 没参数时下"当前默认组合"：流式 paraformer + 句末 SenseVoice + TTS
-  for m in paraformer sensevoice tts; do fetch_model "$m"; done
+  # 没参数时下"当前默认组合"：流式 paraformer + 句末 SenseVoice + TTS（Matcha）
+  for m in paraformer sensevoice matcha-zh-en; do fetch_model "$m"; done
   echo
   echo "完成。校验：./scripts/fetch-model.sh --check"
   exit 0
