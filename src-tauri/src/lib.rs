@@ -132,7 +132,24 @@ fn start_tts_worker(
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let dir = tts_model_dir();
-        let tts = match Tts::new(&TtsConfig::new(dir.clone())) {
+        let mut tts_config = TtsConfig::new(dir.clone());
+        // ZipVoice 零样本克隆：优先环境变量，其次 $GABTWIN_HOME/tts/reference.{wav,txt}
+        tts_config.reference_wav = std::env::var_os("GABTWIN_TTS_REF_WAV")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let path = gabtwin_home().join("tts/reference.wav");
+                path.is_file().then_some(path)
+            });
+        tts_config.reference_text = std::env::var("GABTWIN_TTS_REF_TEXT").ok().or_else(|| {
+            std::fs::read_to_string(gabtwin_home().join("tts/reference.txt"))
+                .ok()
+                .map(|text| text.trim().to_string())
+        });
+        tts_config.num_steps = std::env::var("GABTWIN_TTS_STEPS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let tts = match Tts::new(&tts_config) {
             Ok(tts) => {
                 // 第一次合成会初始化内部缓冲，明显更慢；启动时先空跑一句。
                 let warm = Instant::now();

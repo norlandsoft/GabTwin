@@ -4,7 +4,7 @@
 //! 只要凑出一个能听懂的小句就先合成播放，后面的句子继续合成。
 
 use anyhow::{bail, Context, Result};
-use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig};
+use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsZipvoiceModelConfig};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +17,11 @@ pub struct TtsConfig {
     /// onnxruntime provider：cpu / coreml（macOS）
     pub provider: String,
     pub debug: bool,
+    /// ZipVoice 零样本克隆：参考音频与参考文本。
+    pub reference_wav: Option<PathBuf>,
+    pub reference_text: Option<String>,
+    /// ZipVoice 的流匹配步数（0 = 引擎默认）
+    pub num_steps: i32,
 }
 
 impl TtsConfig {
@@ -28,13 +33,59 @@ impl TtsConfig {
             speed: 1.0,
             provider: "cpu".to_string(),
             debug: false,
+            reference_wav: None,
+            reference_text: None,
+            num_steps: 0,
         }
     }
+}
+
+struct Reference {
+    samples: Vec<f32>,
+    sample_rate: u32,
+    text: String,
 }
 
 pub struct Tts {
     inner: OfflineTts,
     cfg: TtsConfig,
+    reference: Option<Reference>,
+    zipvoice: bool,
+}
+
+fn load_reference(path: &Path, text: &str) -> Result<Reference> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("读取参考音频失败：{}", path.display()))?;
+    let spec = reader.spec();
+    let channels = spec.channels.max(1) as usize;
+    let raw: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            16 => reader
+                .samples::<i16>()
+                .map(|s| s.map(|v| v as f32 / 32768.0))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            32 => reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / 2147483648.0))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            bits => bail!("参考音频位数不支持：{bits}"),
+        },
+    };
+    let samples: Vec<f32> = raw
+        .chunks(channels)
+        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+        .collect();
+    if samples.len() < spec.sample_rate as usize / 2 {
+        bail!("参考音频太短（<0.5 s）：{}", path.display());
+    }
+    Ok(Reference {
+        samples,
+        sample_rate: spec.sample_rate,
+        text: text.trim().to_string(),
+    })
 }
 
 /// 内置发音修正表（与 Matcha 词典同格式）。
@@ -110,6 +161,8 @@ impl Tts {
     pub fn new(cfg: &TtsConfig) -> Result<Self> {
         let dir = &cfg.model_dir;
         let tokens = dir.join("tokens.txt");
+        let mut reference = None;
+        let mut zipvoice = false;
         if !tokens.is_file() {
             bail!("TTS 模型文件缺失：{}（需要 tokens.txt）", tokens.display());
         }
@@ -120,7 +173,46 @@ impl Tts {
         config.model.debug = cfg.debug;
         config.max_num_sentences = 2;
 
-        if let Some(acoustic) = pick_onnx(dir, "model-steps") {
+        let zip_encoder = pick_onnx(dir, "encoder");
+        let zip_decoder = pick_onnx(dir, "decoder");
+        if let (Some(encoder), Some(decoder)) = (zip_encoder, zip_decoder) {
+            // ZipVoice：零样本克隆，中英，24 kHz 声码器
+            let vocoder = pick_onnx(dir, "vocos").ok_or_else(|| {
+                anyhow::anyhow!("ZipVoice 需要 vocos_24khz.onnx（{}）", dir.display())
+            })?;
+            let mut lexicons: Vec<String> = Vec::new();
+            for name in ["lexicon.txt", "lexicon-en-us.txt"] {
+                let path = dir.join(name);
+                if path.is_file() {
+                    lexicons.push(path.display().to_string());
+                }
+            }
+            config.model.zipvoice = OfflineTtsZipvoiceModelConfig {
+                tokens: Some(tokens.display().to_string()),
+                encoder: Some(encoder.display().to_string()),
+                decoder: Some(decoder.display().to_string()),
+                vocoder: Some(vocoder.display().to_string()),
+                lexicon: if lexicons.is_empty() {
+                    None
+                } else {
+                    Some(lexicons.join(","))
+                },
+                feat_scale: 0.1,
+                t_shift: 0.5,
+                target_rms: 0.1,
+                guidance_scale: 1.0,
+                ..Default::default()
+            };
+            zipvoice = true;
+            reference = match (&cfg.reference_wav, &cfg.reference_text) {
+                (Some(wav), Some(text)) if !text.trim().is_empty() => {
+                    Some(load_reference(wav, text)?)
+                }
+                _ => bail!(
+                    "ZipVoice 需要参考音频和参考文本（GABTWIN_TTS_REF_WAV / GABTWIN_TTS_REF_TEXT）"
+                ),
+            };
+        } else if let Some(acoustic) = pick_onnx(dir, "model-steps") {
             // Matcha（中英，16 kHz，配 vocos 声码器；非自回归，快）
             let vocoder = pick_onnx(dir, "vocos")
                 .or_else(|| pick_onnx(dir, "vocoder"))
@@ -194,6 +286,8 @@ impl Tts {
         Ok(Self {
             inner,
             cfg: cfg.clone(),
+            reference,
+            zipvoice,
         })
     }
 
@@ -203,11 +297,27 @@ impl Tts {
 
     /// 合成一句，返回单声道 f32 采样。
     pub fn synthesize(&self, text: &str) -> Result<Vec<f32>> {
-        let generation = GenerationConfig {
+        let mut generation = GenerationConfig {
             sid: self.cfg.speaker_id,
             speed: self.cfg.speed,
             ..Default::default()
         };
+        if let Some(reference) = &self.reference {
+            generation.reference_audio = Some(reference.samples.clone());
+            generation.reference_sample_rate = reference.sample_rate as i32;
+            generation.reference_text = Some(reference.text.clone());
+        }
+        // ZipVoice 默认 2 步：本机 RTF<1，能边合成边播；4 步质量更好但 RTF≈1.9。
+        let steps = if self.cfg.num_steps > 0 {
+            self.cfg.num_steps
+        } else if self.zipvoice {
+            2
+        } else {
+            0
+        };
+        if steps > 0 {
+            generation.num_steps = steps;
+        }
         let audio = self
             .inner
             .generate_with_config(text, &generation, None::<fn(&[f32], f32) -> bool>)

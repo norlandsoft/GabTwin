@@ -118,6 +118,18 @@ struct Args {
     #[arg(long)]
     split: bool,
 
+    /// ZipVoice 参考音频（克隆音色）
+    #[arg(long)]
+    reference_wav: Option<PathBuf>,
+
+    /// ZipVoice 流匹配步数（0 = 默认）
+    #[arg(long, default_value_t = 0)]
+    steps: i32,
+
+    /// ZipVoice 参考音频对应的文字
+    #[arg(long)]
+    reference_text: Option<String>,
+
     /// 列出输入设备后退出
     #[arg(long)]
     list_devices: bool,
@@ -148,8 +160,14 @@ fn main() -> Result<()> {
             .out
             .clone()
             .unwrap_or_else(|| PathBuf::from("/tmp/gabtwin-tts.wav"));
-        let tts =
-            Tts::new(&TtsConfig::new(tts_dir.clone())).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        let mut tts_config = TtsConfig::new(tts_dir.clone());
+        tts_config.speaker_id = args.sid;
+        tts_config.provider = args.provider.clone();
+        tts_config.debug = args.verbose;
+        tts_config.reference_wav = args.reference_wav.clone();
+        tts_config.reference_text = args.reference_text.clone();
+        tts_config.num_steps = args.steps;
+        let tts = Tts::new(&tts_config).map_err(|e| anyhow::anyhow!("{e:#}"))?;
         let started = Instant::now();
         let samples = if args.split {
             let mut splitter = ClauseSplitter::new();
