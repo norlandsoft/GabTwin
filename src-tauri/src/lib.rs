@@ -218,6 +218,7 @@ fn start_tts_worker(
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
                     }
+                    log(format!("TTS 句：{text}"));
                     let tick = Instant::now();
                     let samples = match tts.synthesize(&text) {
                         Ok(samples) => samples,

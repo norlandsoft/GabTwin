@@ -20,7 +20,7 @@ use gabtwin_session::{
     default_asr_model_dir, input_devices, read_wav, replay_wav, run_mic, OfflineAsr,
     OfflineAsrConfig, SessionConfig, SessionEvent,
 };
-use gabtwin_tts::{Tts, TtsConfig};
+use gabtwin_tts::{ClauseSplitter, Tts, TtsConfig};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -114,6 +114,10 @@ struct Args {
     #[arg(long, default_value = "cpu")]
     provider: String,
 
+    /// --tts 时按应用里的分句器切分，逐句合成后拼接（验证断句听感）
+    #[arg(long)]
+    split: bool,
+
     /// 列出输入设备后退出
     #[arg(long)]
     list_devices: bool,
@@ -147,7 +151,21 @@ fn main() -> Result<()> {
         let tts =
             Tts::new(&TtsConfig::new(tts_dir.clone())).map_err(|e| anyhow::anyhow!("{e:#}"))?;
         let started = Instant::now();
-        let samples = tts.synthesize(&text)?;
+        let samples = if args.split {
+            let mut splitter = ClauseSplitter::new();
+            let mut pieces = splitter.push(&text);
+            if let Some(last) = splitter.flush() {
+                pieces.push(last);
+            }
+            let mut all = Vec::new();
+            for piece in pieces {
+                println!("句：{piece}");
+                all.extend(tts.synthesize(&piece)?);
+            }
+            all
+        } else {
+            tts.synthesize(&text)?
+        };
         let elapsed = started.elapsed().as_secs_f64();
         let sr = tts.sample_rate();
         let seconds = samples.len() as f64 / sr as f64;

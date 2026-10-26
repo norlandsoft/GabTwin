@@ -263,39 +263,60 @@ fn clean(text: &str) -> String {
 }
 
 /// 找到第一个合适的分句点（返回字节下标，切点在标点之后）。
+///
+/// 原则：**句子优先**。句末标点（引号外）最自然；等不及了退到范围内最后一个逗号；
+/// 再不行才硬切。引号里的内容会多等一会儿，等引号闭合再切。
 fn find_split(text: &str, first: bool) -> Option<usize> {
-    // 首句越短，出声越快：6 个字大约是 0.5 s 音频、300–500 ms 合成。
-    let min_soft = if first { 4 } else { 10 };
-    let max_len = if first { 6 } else { 30 };
+    let hard_max = if first { 40 } else { 60 };
+    let comma_min = if first { 12 } else { 20 };
 
     let mut chars = 0usize;
-    let mut soft: Option<usize> = None;
+    let mut depth = 0i32;
+    let mut comma: Option<usize> = None;
+    let mut sentence: Option<usize> = None;
     let mut hard: Option<usize> = None;
 
     for (idx, c) in text.char_indices() {
         chars += 1;
         let end = idx + c.len_utf8();
-        if matches!(c, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n') {
-            hard = Some(end);
+        match c {
+            '「' | '『' | '“' | '‘' | '（' | '(' | '《' | '【' | '[' => depth += 1,
+            '」' | '』' | '”' | '’' | '）' | ')' | '》' | '】' | ']' => {
+                depth = (depth - 1).max(0)
+            }
+            _ => {}
+        }
+        // 句末标点只认引号外的。
+        if depth == 0 && matches!(c, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n') {
+            sentence = Some(end);
             break;
         }
-        if matches!(c, '，' | ',' | '、' | '：' | ':') && chars >= min_soft && soft.is_none() {
-            soft = Some(end);
+        // 逗号取范围内最后一个，切得尽量靠后。
+        if matches!(c, '，' | ',' | '、' | '：' | ':') && chars >= comma_min {
+            comma = Some(end);
         }
-        if chars >= max_len {
-            break;
+        if chars >= hard_max {
+            if depth == 0 {
+                hard = Some(end);
+                break;
+            }
+            // 引号里：最多再等 40 字，等它闭合。
+            if chars >= hard_max + 40 {
+                hard = Some(end);
+                break;
+            }
         }
     }
 
-    hard.or(soft).or_else(|| {
-        if chars >= max_len {
-            text.char_indices()
-                .nth(max_len - 1)
-                .map(|(idx, c)| idx + c.len_utf8())
-        } else {
-            None
-        }
-    })
+    // 流式输入：还没到句末、也没到硬上限时，不要拿一个逗号就切——
+    // 后面可能还有半句。等到句末，或者攒够 hard_max 再退到最后一个逗号。
+    if sentence.is_some() {
+        return sentence;
+    }
+    if hard.is_some() {
+        return comma.or(hard);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -303,22 +324,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn splits_first_clause_short() {
+    fn waits_for_a_natural_boundary() {
         let mut s = ClauseSplitter::new();
+        // 没有句末标点、也没到 26 字：先攒着，不硬切。
         let out = s.push("嗯，我觉得这个事情");
-        assert_eq!(out, vec!["嗯，我觉得这".to_string()]);
-        let rest = s.flush().unwrap();
-        assert_eq!(rest, "个事情");
+        assert!(out.is_empty());
+        assert_eq!(s.flush().unwrap(), "嗯，我觉得这个事情");
     }
 
     #[test]
     fn later_clauses_wait_for_punctuation() {
         let mut s = ClauseSplitter::new();
-        // 首句按 6 字硬切，之后按标点切
+        // 句末标点优先，切在"。"之后
         let out = s.push("我们先看看再说。后面还有");
-        assert_eq!(out, vec!["我们先看看再".to_string()]);
+        assert_eq!(out, vec!["我们先看看再说。".to_string()]);
         let rest = s.flush().unwrap();
-        assert_eq!(rest, "说。后面还有");
+        assert_eq!(rest, "后面还有");
     }
 
     #[test]
@@ -329,10 +350,30 @@ mod tests {
     }
 
     #[test]
-    fn hard_cap_for_first_clause() {
+    fn waits_through_a_short_comma() {
         let mut s = ClauseSplitter::new();
-        let out = s.push("一二三四五六七八九十一二三四五");
+        let out = s.push("嗯，我听到了，");
+        assert!(out.is_empty());
+        let out = s.push("后面还有。");
+        assert_eq!(out, vec!["嗯，我听到了，后面还有。".to_string()]);
+    }
+
+    #[test]
+    fn long_first_clause_falls_back_to_last_comma() {
+        let mut s = ClauseSplitter::new();
+        let text = "一二三四五六七八九十，十一十二十三十四十五十六，十七十八十九二十二一二二二三二四二五二六二七二八二九三十三一三二";
+        let out = s.push(text);
         assert_eq!(out.len(), 1);
-        assert!(out[0].chars().count() <= 6);
+        // 切在范围内最后一个逗号之后，而不是第一个。
+        assert!(out[0].ends_with('，'));
+        assert!(out[0].chars().count() >= 20);
+    }
+
+    #[test]
+    fn does_not_split_inside_quotes() {
+        let mut s = ClauseSplitter::new();
+        let text = "你刚才说的是「对我做了介绍啊，那么我想说的是呢，大家如果对我的研究感兴趣呢」。";
+        let out = s.push(text);
+        assert_eq!(out, vec![text.to_string()]);
     }
 }
