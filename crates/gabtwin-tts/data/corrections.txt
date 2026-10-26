@@ -1,0 +1,49 @@
+# GabTwin TTS 发音修正表（Matcha 词典格式：词 + 带声调数字的拼音）
+# 只放"词典缺失或读错"的词；用户词条写在模型目录的 user_lexicon.txt，优先级更高。
+
+# 地 / 得 作状语、补语时读 de5（字典单字默认是 di4 / de2）
+慢慢地 man4 man4 de5
+快快地 kuai4 kuai4 de5
+好好地 hao3 hao3 de5
+轻轻地 qing1 qing1 de5
+静静地 jing4 jing4 de5
+悄悄地 qiao1 qiao1 de5
+渐渐地 jian4 jian4 de5
+深深地 shen1 shen1 de5
+远远地 yuan3 yuan3 de5
+紧紧地 jin3 jin3 de5
+认真地 ren4 zhen1 de5
+仔细地 zi3 xi4 de5
+高兴地 gao1 xing4 de5
+开心地 kai1 xin1 de5
+大声地 da4 sheng1 de5
+小声地 xiao3 sheng1 de5
+努力地 nu3 li4 de5
+用力地 yong4 li4 de5
+快速地 kuai4 su4 de5
+迅速地 xun4 su4 de5
+跑得快 pao3 de5 kuai4
+跑得慢 pao3 de5 man4
+说得好 shuo1 de5 hao3
+说得对 shuo1 de5 dui4
+做得好 zuo4 de5 hao3
+做得对 zuo4 de5 dui4
+来得早 lai2 de5 zao3
+走得快 zou3 de5 kuai4
+写得好 xie3 de5 hao3
+唱得好 chang4 de5 hao3
+睡得好 shui4 de5 hao3
+吃得好 chi1 de5 hao3
+长得漂亮 zhang3 de5 piao4 liang5
+玩得开心 wan2 de5 kai1 xin1
+
+# 常见词：补缺或改正声调
+地方 di4 fang5
+得到 de2 dao4
+看着 kan4 zhe5
+颜色 yan2 se4
+教室 jiao4 shi4
+记得 ji4 de5
+舍不得 she3 bu5 de5
+值得 zhi2 de2
+觉得 jue2 de5

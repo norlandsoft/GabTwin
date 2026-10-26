@@ -5,7 +5,8 @@
 
 use anyhow::{bail, Context, Result};
 use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct TtsConfig {
@@ -34,6 +35,52 @@ impl TtsConfig {
 pub struct Tts {
     inner: OfflineTts,
     cfg: TtsConfig,
+}
+
+/// 内置发音修正表（与 Matcha 词典同格式）。
+const CORRECTIONS: &str = include_str!("../data/corrections.txt");
+
+fn read_lexicon_text(text: &str, map: &mut BTreeMap<String, String>) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        if let (Some(word), Some(first)) = (parts.next(), parts.next()) {
+            let mut pinyin = first.to_string();
+            for rest in parts {
+                pinyin.push(' ');
+                pinyin.push_str(rest);
+            }
+            map.insert(word.to_string(), pinyin);
+        }
+    }
+}
+
+fn read_lexicon(path: &Path, map: &mut BTreeMap<String, String>) {
+    if let Ok(text) = std::fs::read_to_string(path) {
+        read_lexicon_text(&text, map);
+    }
+}
+
+/// 模型词典 + 内置修正 + 用户词条的合并词典；后写入的覆盖前面的。
+fn merged_matcha_lexicon(dir: &Path) -> Result<PathBuf> {
+    let mut map = BTreeMap::new();
+    read_lexicon(&dir.join("lexicon.txt"), &mut map);
+    read_lexicon_text(CORRECTIONS, &mut map);
+    read_lexicon(&dir.join("user_lexicon.txt"), &mut map);
+
+    let out = dir.join("lexicon.merged.txt");
+    let mut text = String::with_capacity(2_000_000);
+    for (word, pinyin) in &map {
+        text.push_str(word);
+        text.push(' ');
+        text.push_str(pinyin);
+        text.push('\n');
+    }
+    std::fs::write(&out, text)?;
+    Ok(out)
 }
 
 /// 找 `<prefix>*.onnx`，有 int8 优先。
@@ -83,12 +130,10 @@ impl Tts {
                         dir.display()
                     )
                 })?;
-            let lexicon = dir.join("lexicon.txt");
+            let lexicon = merged_matcha_lexicon(dir)?;
             config.model.matcha.acoustic_model = Some(acoustic.display().to_string());
             config.model.matcha.vocoder = Some(vocoder.display().to_string());
-            if lexicon.is_file() {
-                config.model.matcha.lexicon = Some(lexicon.display().to_string());
-            }
+            config.model.matcha.lexicon = Some(lexicon.display().to_string());
             config.model.matcha.tokens = Some(tokens.display().to_string());
         } else if dir.join("voices.bin").is_file() {
             // Kokoro（24 kHz 多语，中文音色从 sid 3 开始）
