@@ -43,6 +43,7 @@ MODELS = {
     / "models"
     / "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10",
     "small-ctc": HOME / "models" / "streaming-zipformer-small-ctc-zh-int8-2025-04-01",
+    "paraformer": HOME / "models" / "streaming-paraformer-bilingual-zh-en",
 }
 
 TEST_SET = [

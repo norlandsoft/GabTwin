@@ -62,6 +62,10 @@ fn sample_wav_path() -> PathBuf {
             return candidate;
         }
     }
+    let shared = gabtwin_home().join("samples").join("0.wav");
+    if shared.is_file() {
+        return shared;
+    }
     dir.join("0.wav")
 }
 

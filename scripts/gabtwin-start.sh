@@ -17,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
-MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_HOME/models/streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10}"
+MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_HOME/models/streaming-paraformer-bilingual-zh-en}"
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
 LOG_DIR="$GABTWIN_HOME/logs"

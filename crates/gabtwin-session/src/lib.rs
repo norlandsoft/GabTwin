@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub use gabtwin_audio::{input_devices, DeviceInfo};
 
-pub const MODEL_DIR_NAME: &str = "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10";
+pub const MODEL_DIR_NAME: &str = "streaming-paraformer-bilingual-zh-en";
 
 /// GabTwin 的根目录。`GABTWIN_HOME` 可覆盖（测试、离线部署）。
 pub fn gabtwin_home() -> PathBuf {
@@ -89,9 +89,6 @@ pub struct SessionConfig {
     /// 会话开始时先喂多少毫秒静音给识别器做预热。
     /// 流式模型没有这段热身时，用户开口的第一个词容易被吃掉。
     pub warmup_ms: u32,
-    /// 至少要有这么多毫秒的真实静音，才允许模型定稿一句话。
-    /// 否则模型会被预热静音骗到，在没有停顿的地方断句。
-    pub min_silence_ms: u32,
 }
 
 impl SessionConfig {
@@ -101,8 +98,7 @@ impl SessionConfig {
             asr: AsrConfig::new(model_dir),
             chunk_ms: 50,
             onset_rms: 0.01,
-            warmup_ms: 150,
-            min_silence_ms: 250,
+            warmup_ms: 0,
         }
     }
 }
@@ -291,7 +287,7 @@ where
             }
 
             let tick = Instant::now();
-            let updates = asr.accept(sr, &mono, stats.silence_ms >= cfg.min_silence_ms as u64);
+            let updates = asr.accept(sr, &mono);
             stats.proc_time += tick.elapsed();
             for update in updates {
                 stats.on_update(update, &mut sink);
@@ -360,7 +356,7 @@ where
         stats.on_audio(chunk, level, cfg.onset_rms);
         sink(SessionEvent::Level { rms: level });
         let tick = Instant::now();
-        let updates = asr.accept(sr, chunk, stats.silence_ms >= cfg.min_silence_ms as u64);
+        let updates = asr.accept(sr, chunk);
         stats.proc_time += tick.elapsed();
         for update in updates {
             stats.on_update(update, &mut sink);
@@ -378,7 +374,7 @@ where
         }
         stats.on_silence(chunk.len());
         let tick = Instant::now();
-        let updates = asr.accept(sr, chunk, stats.silence_ms >= cfg.min_silence_ms as u64);
+        let updates = asr.accept(sr, chunk);
         stats.proc_time += tick.elapsed();
         for update in updates {
             stats.on_update(update, &mut sink);
@@ -416,7 +412,7 @@ fn warmup(asr: &mut Asr, sample_rate: u32, ms: u32) {
     }
     let samples = (sample_rate as u64 * ms as u64 / 1000) as usize;
     let silence = vec![0.0f32; samples];
-    let _ = asr.accept(sample_rate, &silence, false);
+    let _ = asr.accept(sample_rate, &silence);
 }
 
 fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {

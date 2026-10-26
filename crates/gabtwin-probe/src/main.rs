@@ -68,8 +68,12 @@ struct Args {
     #[arg(long)]
     beam: bool,
 
-    /// 会话开始前喂多少毫秒静音做预热（默认 500）
-    #[arg(long, default_value_t = 150)]
+    /// blank penalty（负值抑制重复 token）
+    #[arg(long, default_value_t = 0.0)]
+    blank_penalty: f32,
+
+    /// 会话开始前喂多少毫秒静音做预热（默认 0）
+    #[arg(long, default_value_t = 0)]
     warmup_ms: u32,
 
     /// 把事件写成 JSONL
@@ -114,6 +118,7 @@ fn main() -> Result<()> {
     cfg.onset_rms = args.onset;
     cfg.chunk_ms = args.chunk_ms;
     cfg.asr.beam_search = args.beam;
+    cfg.asr.blank_penalty = args.blank_penalty;
     cfg.warmup_ms = args.warmup_ms;
     if let Some(device) = &args.device {
         cfg.capture.device_name = Some(device.clone());

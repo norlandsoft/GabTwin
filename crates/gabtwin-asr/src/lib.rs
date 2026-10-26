@@ -15,6 +15,8 @@ pub enum AsrKind {
     Transducer,
     /// CTC：单个 model.onnx（如 streaming zipformer2 CTC）。
     Ctc,
+    /// paraformer：encoder + decoder，没有 joiner。
+    Paraformer,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +32,8 @@ pub struct AsrConfig {
     pub beam_search: bool,
     /// beam search 的活跃路径数。
     pub max_active_paths: i32,
+    /// 负值鼓励输出 blank，可抑制重复字。
+    pub blank_penalty: f32,
 }
 
 impl AsrConfig {
@@ -41,6 +45,7 @@ impl AsrConfig {
             kind: AsrKind::Auto,
             beam_search: false,
             max_active_paths: 4,
+            blank_penalty: 0.0,
         }
     }
 }
@@ -102,8 +107,10 @@ impl Asr {
 
         let kind = match cfg.kind {
             AsrKind::Auto => {
-                if encoder.is_some() {
+                if encoder.is_some() && joiner.is_some() {
                     AsrKind::Transducer
+                } else if encoder.is_some() && decoder.is_some() {
+                    AsrKind::Paraformer
                 } else if ctc.is_some() {
                     AsrKind::Ctc
                 } else {
@@ -136,12 +143,24 @@ impl Asr {
                 })?;
                 config.model_config.zipformer2_ctc.model = Some(ctc.display().to_string());
             }
+            AsrKind::Paraformer => {
+                let (encoder, decoder) = match (encoder, decoder) {
+                    (Some(e), Some(d)) => (e, d),
+                    _ => bail!(
+                        "paraformer 模型需要 encoder / decoder 两个文件（{}）",
+                        dir.display()
+                    ),
+                };
+                config.model_config.paraformer.encoder = Some(encoder.display().to_string());
+                config.model_config.paraformer.decoder = Some(decoder.display().to_string());
+            }
             AsrKind::Auto => unreachable!(),
         }
         config.model_config.tokens = Some(tokens.display().to_string());
         config.model_config.num_threads = cfg.num_threads;
         config.model_config.provider = Some("cpu".to_string());
 
+        config.blank_penalty = cfg.blank_penalty;
         config.enable_endpoint = true;
         config.rule1_min_trailing_silence = cfg.endpoint_silence_s;
         config.rule2_min_trailing_silence = 1.2;
@@ -165,15 +184,7 @@ impl Asr {
     }
 
     /// 传入任意采样率的单声道音频；sherpa-onnx 内部重采样到 16 kHz。
-    ///
-    /// `allow_endpoint`：只有确实检测到一段真实静音时才允许定稿。
-    /// 模型自己算出的 trailing silence 会被预热的静音骗到，在没有停顿的地方断句。
-    pub fn accept(
-        &mut self,
-        sample_rate: u32,
-        samples: &[f32],
-        allow_endpoint: bool,
-    ) -> Vec<AsrUpdate> {
+    pub fn accept(&mut self, sample_rate: u32, samples: &[f32]) -> Vec<AsrUpdate> {
         let mut out = Vec::new();
         self.stream.accept_waveform(sample_rate as i32, samples);
 
@@ -191,7 +202,7 @@ impl Asr {
                 out.push(AsrUpdate::Partial(text));
             }
 
-            if allow_endpoint && self.recognizer.is_endpoint(&self.stream) {
+            if self.recognizer.is_endpoint(&self.stream) {
                 let final_text = self
                     .recognizer
                     .get_result(&self.stream)

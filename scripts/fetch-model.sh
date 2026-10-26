@@ -8,7 +8,7 @@
 #   - 每个文件校验 sha256，校验不过就重下，不把坏文件留给识别器。
 #
 # 用法：
-#   ./scripts/fetch-model.sh                  # 下载默认模型（multilingual，340 MB）
+#   ./scripts/fetch-model.sh                  # 下载默认模型（paraformer，237 MB）
 #   ./scripts/fetch-model.sh zipformer-zh     # 中文大模型（167 MB）
 #   ./scripts/fetch-model.sh small-ctc        # 中文 small-CTC（26 MB，省 CPU）
 #   ./scripts/fetch-model.sh bilingual        # 中英双语（198 MB）
@@ -31,7 +31,7 @@ GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
-MODELS="zipformer-zh small-ctc bilingual multilingual"
+MODELS="zipformer-zh small-ctc bilingual multilingual paraformer"
 
 repo_of() {
   case "$1" in
@@ -39,6 +39,7 @@ repo_of() {
     small-ctc) echo "csukuangfj/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01" ;;
     bilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
     multilingual) echo "csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
+    paraformer) echo "csukuangfj/sherpa-onnx-streaming-paraformer-bilingual-zh-en" ;;
     *) return 1 ;;
   esac
 }
@@ -49,6 +50,7 @@ dir_of() {
     small-ctc) echo "streaming-zipformer-small-ctc-zh-int8-2025-04-01" ;;
     bilingual) echo "streaming-zipformer-bilingual-zh-en-2023-02-20" ;;
     multilingual) echo "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10" ;;
+    paraformer) echo "streaming-paraformer-bilingual-zh-en" ;;
   esac
 }
 
@@ -77,6 +79,13 @@ decoder-epoch-99-avg-1.int8.onnx:1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992
 joiner-epoch-99-avg-1.int8.onnx:1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0
 tokens.txt:a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3
 bpe.model:bcae393dbc5611be5ffa4c7ae0841558978a5a4f484008cb9dff3a2cc97ebe01
+EOF
+      ;;
+    paraformer)
+      cat <<'EOF'
+encoder.int8.onnx:81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a
+decoder.int8.onnx:f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f
+tokens.txt:59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6
 EOF
       ;;
     multilingual)
@@ -171,6 +180,15 @@ fetch_model() {
     wait "$pid" || fail=1
   done
 
+  # 所有模型共用一个示例音频，供应用里的「示例音频」按钮使用
+  mkdir -p "$GABTWIN_HOME/samples"
+  if [[ ! -s "$GABTWIN_HOME/samples/0.wav" ]]; then
+    curl -fL --noproxy '*' -A "$UA" --retry 2 --retry-delay 3 -sS \
+      -o "$GABTWIN_HOME/samples/0.wav" \
+      "$MIRROR/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main/test_wavs/0.wav?download=true" \
+      || echo "  ! 示例音频下载失败（不影响识别）" >&2
+  fi
+
   local wav
   for wav in $(wavs_of "$model"); do
     if [[ -s "$dir/test_wavs/$wav" ]]; then
@@ -223,13 +241,13 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
-    all|zipformer-zh|small-ctc|bilingual|multilingual) TARGET="$1"; shift ;;
+    all|zipformer-zh|small-ctc|bilingual|multilingual|paraformer) TARGET="$1"; shift ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ -z "$TARGET" ]]; then
-  TARGET=multilingual
+  TARGET=paraformer
 fi
 
 if [[ "$MODE" == check ]]; then

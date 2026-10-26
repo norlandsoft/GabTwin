@@ -7,8 +7,9 @@
 | VAD | Silero VAD | 1.8 MB | ONNX | 待核（MIT？） | 已验证（DSH 在用） |
 | ASR | SenseVoiceSmall int8 | 239 MB | sherpa-onnx | 待核 | 已验证，RTF 0.025 |
 | ASR 备选 | streaming zipformer 中英 | 100–300 MB | sherpa-onnx | 待核（多为 Apache-2.0） | 未验证 |
-| ASR 流式（当前默认） | streaming zipformer 9 语 int8（中英等） | 340 MB | sherpa-onnx | 待核（来自 PengChengStarling，仓库未标 license） | **已验证**：英文 0%、中文 1.4%，首字约 350–520 ms，RTF 0.09–0.10 |
-| ASR 流式（中文专用） | streaming zipformer zh int8 2025-06-30 | 167 MB | sherpa-onnx | 待核（icefall 代码 Apache-2.0，训练数据多源） | 已验证，中文 0%，英文不可用；内存少约 340 MB |
+| ASR 流式（当前默认） | streaming paraformer 中英 int8 | 237 MB | sherpa-onnx | **Apache-2.0** | **已验证**：中文 0.7%、英文 10.9%、混说 25.5%；首字约 550 ms，RTF 0.185 |
+| ASR 流式（中文专用） | streaming zipformer zh int8 2025-06-30 | 167 MB | sherpa-onnx | 待核（icefall 代码 Apache-2.0，训练数据多源） | 已验证，中文 0%，英文不可用 |
+| ASR 流式（九语，不推荐） | streaming zipformer 9 语 int8 | 340 MB | sherpa-onnx | 待核（PengChengStarling） | 中文 1.4%，但中文口音英文会串日/越语 |
 | ASR 流式（中英双语） | streaming zipformer bilingual zh-en 2023-02-20 | 198 MB | sherpa-onnx | **Apache-2.0** | 已验证，英文 2.2% 但中文有重复字（6.2%），未采用 |
 | 端点 | smart-turn 类小模型 | 待定 | ONNX | 待核 | 可选，先用规则 |
 | LLM | DeepSeek（云） | — | HTTPS | 服务条款 | 默认 |
@@ -36,8 +37,8 @@
 ## 分阶段选型
 
 ### M1（先跑通）
-- ASR：流式 zipformer 9 语（中英，已跑通，见 [dev/01](dev/01-voice-input.md)）；
-  纯中文 zipformer 与 Apache-2.0 双语模型作为备选；SenseVoice 整段保留为离线/高精度备选
+- ASR：流式 paraformer 中英（已跑通，见 [dev/01](dev/01-voice-input.md)）；
+  纯中文 zipformer 与中英 zipformer 作为备选；SenseVoice 整段保留为离线/高精度备选
 - LLM：DeepSeek 流式
 - TTS：Piper 本地（CPU，快）
 
@@ -87,7 +88,7 @@
 
 - [ ] SenseVoiceSmall 权重许可（代码 Apache-2.0，权重可能另有条款）
 - [ ] streaming zipformer zh 权重许可（icefall 训练代码 Apache-2.0；训练数据为多源中文合集）
-- [ ] streaming zipformer 9 语权重许可（PengChengStarling，仓库未标 license —— 当前默认模型，商用前必须确认）
+- [ ] streaming zipformer 9 语权重许可（PengChengStarling，仓库未标 license；已退出默认）
 - [ ] Silero VAD 权重许可
 - [ ] Piper 各音色许可（部分为 CC BY-NC，**不可商用**）
 - [ ] Kokoro 权重与音色许可
