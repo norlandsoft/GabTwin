@@ -33,10 +33,23 @@ curl -L -o vocos_24khz.onnx \
 
 ## 当前状态（本机）
 
-- 音色：`talk-dense`（talk.mp3 第 3.8–8.8 s，5 秒密集语音）；
+- 音色：`talk-dense-clean`（talk.mp3 第 3.8–8.8 s，5 秒密集语音，已降噪）；
 - 参考音：`$GABTWIN_HOME/tts/reference.wav`，文字在同目录 `reference.txt`；
 - 有参考音时应用**自动优先用 ZipVoice**，否则回退 Matcha；
-- 实测首音 **3–6 s**、长句 RTF 0.6–1.6，**随机器负载波动很大**（关闭 ComfyUI 等重负载会明显变快）。
+- 实测首音 **1.16 s**（负载正常时）、长句 RTF 0.5–0.8；
+  ComfyUI 等重负载会把首音推到 3–6 s，**速度对负载非常敏感**。
+
+### 参考音降噪
+
+手机/视频录音的环境噪声会被一起克隆。先做高通 + FFT 降噪 + 响度归一：
+
+```bash
+ffmpeg -ss 3.8 -t 5 -i talk.wav \
+  -af "highpass=f=80,afftdn=nf=-25,loudnorm=I=-18:TP=-2" \
+  -ac 1 -ar 24000 reference.wav
+```
+
+降噪后 RTF 从 1.6 回到 0.74（同负载下），杂音也明显减少。
 
 切换音色：
 
@@ -44,7 +57,9 @@ curl -L -o vocos_24khz.onnx \
 ./scripts/gabtwin-voice.sh list
 ./scripts/gabtwin-voice.sh talk        # talk.mp3 开头 6 秒
 ./scripts/gabtwin-voice.sh talk2       # talk2.mov 开头 6 秒
-./scripts/gabtwin-voice.sh talk-dense  # talk.mp3 3.8–8.8 秒（当前）
+./scripts/gabtwin-voice.sh talk-dense  # talk.mp3 3.8–8.8 秒（未降噪）
+./scripts/gabtwin-voice.sh talk-dense-clean   # 降噪版（当前）
+./scripts/gabtwin-voice.sh talk2-dense-clean  # talk2 降噪版
 ```
 
 ## 用法
