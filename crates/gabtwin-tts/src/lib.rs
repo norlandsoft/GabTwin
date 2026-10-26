@@ -295,7 +295,7 @@ impl Tts {
         self.inner.sample_rate() as u32
     }
 
-    /// 合成一句，返回单声道 f32 采样。
+    /// 合成一句，返回单声道 f32 采样（已做 80 Hz 高通与边缘淡入淡出）。
     pub fn synthesize(&self, text: &str) -> Result<Vec<f32>> {
         let mut generation = GenerationConfig {
             sid: self.cfg.speaker_id,
@@ -322,7 +322,46 @@ impl Tts {
             .inner
             .generate_with_config(text, &generation, None::<fn(&[f32], f32) -> bool>)
             .ok_or_else(|| anyhow::anyhow!("TTS 合成失败：{text}"))?;
-        Ok(audio.samples().to_vec())
+        let mut samples = audio.samples().to_vec();
+        cleanup(&mut samples, self.sample_rate());
+        Ok(samples)
+    }
+}
+
+/// 去掉低频"咚咚"（80 Hz 高通）并在首尾做 15 ms 淡入淡出，避免拼接处的爆音。
+fn cleanup(samples: &mut [f32], sample_rate: u32) {
+    if samples.is_empty() || sample_rate == 0 {
+        return;
+    }
+    // RBJ 2nd-order high-pass, Q=0.707
+    let fs = sample_rate as f32;
+    let f0 = 80.0f32;
+    let w0 = 2.0 * std::f32::consts::PI * f0 / fs;
+    let cos = w0.cos();
+    let alpha = w0.sin() / (2.0 * 0.707);
+    let a0 = 1.0 + alpha;
+    let b0 = (1.0 + cos) / 2.0 / a0;
+    let b1 = -(1.0 + cos) / a0;
+    let b2 = (1.0 + cos) / 2.0 / a0;
+    let a1 = -2.0 * cos / a0;
+    let a2 = (1.0 - alpha) / a0;
+    let (mut x1, mut x2, mut y1, mut y2) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    for sample in samples.iter_mut() {
+        let x0 = *sample;
+        let y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1;
+        x1 = x0;
+        y2 = y1;
+        y1 = y0;
+        *sample = y0;
+    }
+    // 15 ms 淡入/淡出
+    let fade = ((sample_rate as f32 * 0.015) as usize).min(samples.len() / 2);
+    for i in 0..fade {
+        let gain = i as f32 / fade as f32;
+        samples[i] *= gain;
+        let last = samples.len() - 1 - i;
+        samples[last] *= gain;
     }
 }
 

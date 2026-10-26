@@ -237,9 +237,7 @@ pub fn recv_chunk(
 
 // ---------- 播放 ----------
 
-use std::collections::VecDeque;
 use std::sync::mpsc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 pub enum SpeakerCommand {
@@ -251,6 +249,7 @@ pub enum SpeakerCommand {
 /// 播放句柄。真正的 cpal 输出流在自己的线程里，句柄只负责投递音频。
 pub struct SpeakerHandle {
     tx: mpsc::Sender<SpeakerCommand>,
+    clear: Arc<AtomicBool>,
     pub sample_rate: u32,
     /// 输出设备是耳机/耳麦时，回声很小，可以边播边听、支持插话。
     pub headphones: bool,
@@ -261,30 +260,37 @@ impl SpeakerHandle {
         let _ = self.tx.send(SpeakerCommand::Play(samples));
     }
     pub fn clear(&self) {
-        let _ = self.tx.send(SpeakerCommand::Clear);
+        self.clear.store(true, Ordering::SeqCst);
     }
 }
+
+/// 环形缓冲 10 秒，避免播放回调被锁卡住导致丢块（听起来是"咚"）。
+const SPEAKER_RING_SAMPLES: usize = 48_000 * 10;
 
 /// 启动默认输出设备；返回句柄和实际输出采样率。
 pub fn start_speaker() -> Result<SpeakerHandle> {
     let (tx, rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
+    let clear = Arc::new(AtomicBool::new(false));
+    let clear_for_thread = clear.clone();
     std::thread::spawn(move || {
-        let buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-        match build_output_stream(buffer.clone()) {
+        let (mut producer, consumer) = HeapRb::<f32>::new(SPEAKER_RING_SAMPLES).split();
+        match build_output_stream(consumer, clear_for_thread.clone()) {
             Ok((stream, rate, headphones)) => {
                 let _ = ready_tx.send(Ok((rate, headphones)));
                 while let Ok(command) = rx.recv() {
                     match command {
                         SpeakerCommand::Play(samples) => {
-                            if let Ok(mut queue) = buffer.lock() {
-                                queue.extend(samples);
+                            let written = producer.push_slice(&samples);
+                            if written < samples.len() {
+                                eprintln!(
+                                    "[audio] 播放缓冲满，丢弃 {} 个样本",
+                                    samples.len() - written
+                                );
                             }
                         }
                         SpeakerCommand::Clear => {
-                            if let Ok(mut queue) = buffer.lock() {
-                                queue.clear();
-                            }
+                            clear_for_thread.store(true, Ordering::SeqCst);
                         }
                         SpeakerCommand::Quit => break,
                     }
@@ -300,6 +306,7 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
     match ready_rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok((rate, headphones))) => Ok(SpeakerHandle {
             tx,
+            clear,
             sample_rate: rate,
             headphones,
         }),
@@ -309,7 +316,8 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
 }
 
 fn build_output_stream(
-    buffer: Arc<Mutex<VecDeque<f32>>>,
+    consumer: HeapCons<f32>,
+    clear: Arc<AtomicBool>,
 ) -> Result<(cpal::Stream, u32, bool), anyhow::Error> {
     let host = cpal::default_host();
     let device = host
@@ -335,31 +343,35 @@ fn build_output_stream(
     let channels = config.channels as usize;
     let rate = config.sample_rate;
     let err_fn = |err| eprintln!("[audio] 输出流错误：{err}");
+    let mut consumer = Some(consumer);
 
     let stream = match sample_format {
         SampleFormat::F32 => {
-            let b = buffer.clone();
+            let mut cons = consumer.take().expect("consumer");
+            let clear = clear.clone();
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [f32], _| fill_f32(data, channels, &b),
+                move |data: &mut [f32], _| fill_f32(data, channels, &mut cons, &clear),
                 err_fn,
                 None,
             )?
         }
         SampleFormat::I16 => {
-            let b = buffer.clone();
+            let mut cons = consumer.take().expect("consumer");
+            let clear = clear.clone();
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [i16], _| fill_i16(data, channels, &b),
+                move |data: &mut [i16], _| fill_i16(data, channels, &mut cons, &clear),
                 err_fn,
                 None,
             )?
         }
         SampleFormat::U16 => {
-            let b = buffer.clone();
+            let mut cons = consumer.take().expect("consumer");
+            let clear = clear.clone();
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [u16], _| fill_u16(data, channels, &b),
+                move |data: &mut [u16], _| fill_u16(data, channels, &mut cons, &clear),
                 err_fn,
                 None,
             )?
@@ -370,41 +382,33 @@ fn build_output_stream(
     Ok((stream, rate, headphones))
 }
 
-fn pop_samples(buffer: &Arc<Mutex<VecDeque<f32>>>, frames: usize) -> Option<Vec<f32>> {
-    let mut queue = buffer.try_lock().ok()?;
-    Some(
-        (0..frames)
-            .map(|_| queue.pop_front().unwrap_or(0.0))
-            .collect(),
-    )
+fn next_sample(consumer: &mut HeapCons<f32>, clear: &AtomicBool) -> f32 {
+    if clear.swap(false, Ordering::SeqCst) {
+        while consumer.try_pop().is_some() {}
+    }
+    consumer.try_pop().unwrap_or(0.0)
 }
 
-fn fill_f32(data: &mut [f32], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+fn fill_f32(data: &mut [f32], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
     if channels == 0 {
         return;
     }
     let frames = data.len() / channels;
-    let Some(values) = pop_samples(buffer, frames) else {
-        data.fill(0.0);
-        return;
-    };
-    for (i, value) in values.into_iter().enumerate() {
+    for i in 0..frames {
+        let value = next_sample(consumer, clear);
         for c in 0..channels {
             data[i * channels + c] = value;
         }
     }
 }
 
-fn fill_i16(data: &mut [i16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+fn fill_i16(data: &mut [i16], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
     if channels == 0 {
         return;
     }
     let frames = data.len() / channels;
-    let Some(values) = pop_samples(buffer, frames) else {
-        data.fill(0);
-        return;
-    };
-    for (i, value) in values.into_iter().enumerate() {
+    for i in 0..frames {
+        let value = next_sample(consumer, clear);
         let sample = (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         for c in 0..channels {
             data[i * channels + c] = sample;
@@ -412,16 +416,13 @@ fn fill_i16(data: &mut [i16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>
     }
 }
 
-fn fill_u16(data: &mut [u16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+fn fill_u16(data: &mut [u16], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
     if channels == 0 {
         return;
     }
     let frames = data.len() / channels;
-    let Some(values) = pop_samples(buffer, frames) else {
-        data.fill(32768);
-        return;
-    };
-    for (i, value) in values.into_iter().enumerate() {
+    for i in 0..frames {
+        let value = next_sample(consumer, clear);
         let sample = (((value.clamp(-1.0, 1.0) * 0.5) + 0.5) * u16::MAX as f32) as u16;
         for c in 0..channels {
             data[i * channels + c] = sample;
@@ -429,7 +430,7 @@ fn fill_u16(data: &mut [u16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>
     }
 }
 
-/// 线性重采样（TTS 22050 → 设备 48000 这类）。语音够用，不做抗混叠。
+/// 线性重采样（TTS 24k → 设备 48k 这类）。语音够用，不做抗混叠。
 pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
     if input.is_empty() || from == 0 || to == 0 || from == to {
         return input.to_vec();
