@@ -1,0 +1,18 @@
+# Rust
+/target
+Cargo.lock.bak
+
+# Node / Tauri
+node_modules/
+dist/
+.vite/
+
+# 模型与音频（不入库）
+*.onnx
+*.wav
+*.pcm
+/models/
+
+# 系统
+.DS_Store
+*.log
