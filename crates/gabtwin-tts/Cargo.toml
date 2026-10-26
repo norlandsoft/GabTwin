@@ -9,3 +9,5 @@ description = "本地 TTS：VITS（sherpa-onnx）+ 口语文本切分"
 anyhow.workspace = true
 sherpa-onnx.workspace = true
 hound.workspace = true
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde_json.workspace = true

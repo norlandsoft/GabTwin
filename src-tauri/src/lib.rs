@@ -5,7 +5,7 @@ use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
     run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
-use gabtwin_tts::{ClauseSplitter, Tts, TtsConfig};
+use gabtwin_tts::{ClauseSplitter, RemoteTts, Tts, TtsConfig};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -129,6 +129,27 @@ fn tts_model_dir() -> PathBuf {
     }
 }
 
+enum Synth {
+    Local(Tts),
+    Remote(RemoteTts),
+}
+
+impl Synth {
+    fn sample_rate(&self) -> u32 {
+        match self {
+            Self::Local(tts) => tts.sample_rate(),
+            Self::Remote(remote) => remote.sample_rate(),
+        }
+    }
+
+    fn synthesize(&self, text: &str) -> anyhow::Result<(Vec<f32>, u32)> {
+        match self {
+            Self::Local(tts) => Ok((tts.synthesize(text)?, tts.sample_rate())),
+            Self::Remote(remote) => remote.synthesize(text),
+        }
+    }
+}
+
 fn start_tts_worker(
     app: AppHandle,
     generation: Arc<AtomicU64>,
@@ -139,45 +160,58 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let dir = tts_model_dir();
-        let mut tts_config = TtsConfig::new(dir.clone());
-        // ZipVoice 零样本克隆：优先环境变量，其次 $GABTWIN_HOME/tts/reference.{wav,txt}
-        tts_config.reference_wav = std::env::var_os("GABTWIN_TTS_REF_WAV")
-            .map(PathBuf::from)
-            .or_else(|| {
-                let path = gabtwin_home().join("tts/reference.wav");
-                path.is_file().then_some(path)
-            });
-        tts_config.reference_text = std::env::var("GABTWIN_TTS_REF_TEXT").ok().or_else(|| {
-            std::fs::read_to_string(gabtwin_home().join("tts/reference.txt"))
-                .ok()
-                .map(|text| text.trim().to_string())
-        });
-        tts_config.num_steps = std::env::var("GABTWIN_TTS_STEPS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        let tts = match Tts::new(&tts_config) {
-            Ok(tts) => {
-                // 第一次合成会初始化内部缓冲，明显更慢；启动时先空跑一句。
-                let warm = Instant::now();
-                let _ = tts.synthesize("你好");
-                log(format!(
-                    "TTS 就绪：{} Hz（预热 {} ms）",
-                    tts.sample_rate(),
-                    warm.elapsed().as_millis()
-                ));
-                tts
+        let synth = if let Ok(url) = std::env::var("GABTWIN_TTS_URL") {
+            match RemoteTts::new(url.clone()) {
+                Ok(remote) => {
+                    log(format!("TTS：远程服务 {url}"));
+                    Synth::Remote(remote)
+                }
+                Err(err) => {
+                    log(format!("远程 TTS 不可用：{err:#}"));
+                    let _ = app.emit(
+                        "tts-error",
+                        serde_json::json!({ "message": format!("远程 TTS 不可用：{err:#}") }),
+                    );
+                    return;
+                }
             }
-            Err(err) => {
-                log(format!("TTS 不可用：{err:#}"));
-                let _ = app.emit(
-                    "tts-error",
-                    serde_json::json!({ "message": format!("TTS 不可用：{err:#}") }),
-                );
-                return;
+        } else {
+            let dir = tts_model_dir();
+            let mut tts_config = TtsConfig::new(dir.clone());
+            tts_config.reference_wav = std::env::var_os("GABTWIN_TTS_REF_WAV")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    let path = gabtwin_home().join("tts/reference.wav");
+                    path.is_file().then_some(path)
+                });
+            tts_config.reference_text = std::env::var("GABTWIN_TTS_REF_TEXT").ok().or_else(|| {
+                std::fs::read_to_string(gabtwin_home().join("tts/reference.txt"))
+                    .ok()
+                    .map(|text| text.trim().to_string())
+            });
+            tts_config.num_steps = std::env::var("GABTWIN_TTS_STEPS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            match Tts::new(&tts_config) {
+                Ok(tts) => Synth::Local(tts),
+                Err(err) => {
+                    log(format!("TTS 不可用：{err:#}"));
+                    let _ = app.emit(
+                        "tts-error",
+                        serde_json::json!({ "message": format!("TTS 不可用：{err:#}") }),
+                    );
+                    return;
+                }
             }
         };
+        let warm = Instant::now();
+        let _ = synth.synthesize("你好");
+        log(format!(
+            "TTS 就绪：{} Hz（预热 {} ms）",
+            synth.sample_rate(),
+            warm.elapsed().as_millis()
+        ));
         let speaker = match start_speaker() {
             Ok(speaker) => speaker,
             Err(err) => {
@@ -193,7 +227,7 @@ fn start_tts_worker(
         log(format!(
             "音频输出：{} Hz（TTS {} Hz，线性重采样），{}",
             speaker.sample_rate,
-            tts.sample_rate(),
+            synth.sample_rate(),
             if speaker.headphones {
                 "耳机：可直接插话"
             } else {
@@ -245,8 +279,8 @@ fn start_tts_worker(
                     }
                     log(format!("TTS 句：{text}"));
                     let tick = Instant::now();
-                    let samples = match tts.synthesize(&text) {
-                        Ok(samples) => samples,
+                    let (samples, tts_rate) = match synth.synthesize(&text) {
+                        Ok(pair) => pair,
                         Err(err) => {
                             log(format!("TTS 合成失败：{err:#}"));
                             let _ = app.emit(
@@ -259,7 +293,6 @@ fn start_tts_worker(
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
                     }
-                    let tts_rate = tts.sample_rate();
                     let ms = samples.len() as u64 * 1000 / tts_rate.max(1) as u64;
                     let audio = resample_linear(&samples, tts_rate, speaker.sample_rate);
                     queued_ms += ms;
