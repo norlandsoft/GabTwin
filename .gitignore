@@ -27,3 +27,6 @@ src-tauri/gen/
 
 # TTS sidecar venv
 .venv-tts*/
+
+# local TTS test models
+models/
