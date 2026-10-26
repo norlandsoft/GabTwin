@@ -20,6 +20,7 @@ use gabtwin_session::{
     default_asr_model_dir, input_devices, read_wav, replay_wav, run_mic, OfflineAsr,
     OfflineAsrConfig, SessionConfig, SessionEvent,
 };
+use gabtwin_tts::{Tts, TtsConfig};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -93,6 +94,18 @@ struct Args {
     #[arg(long)]
     offline_final: Option<PathBuf>,
 
+    /// 只做 TTS：合成 --text 到 --out（WAV）
+    #[arg(long)]
+    tts: Option<PathBuf>,
+
+    /// --tts 要合成的文本
+    #[arg(long)]
+    text: Option<String>,
+
+    /// --tts 的输出 WAV
+    #[arg(long)]
+    out: Option<PathBuf>,
+
     /// 列出输入设备后退出
     #[arg(long)]
     list_devices: bool,
@@ -111,6 +124,34 @@ fn main() -> Result<()> {
                 d.channels
             );
         }
+        return Ok(());
+    }
+
+    if let Some(tts_dir) = &args.tts {
+        let text = args
+            .text
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("--tts 需要同时给 --text"))?;
+        let out = args
+            .out
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/tmp/gabtwin-tts.wav"));
+        let tts =
+            Tts::new(&TtsConfig::new(tts_dir.clone())).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        let started = Instant::now();
+        let samples = tts.synthesize(&text)?;
+        let elapsed = started.elapsed().as_secs_f64();
+        let sr = tts.sample_rate();
+        let seconds = samples.len() as f64 / sr as f64;
+        write_wav(&out, &samples, sr)?;
+        println!("{text}");
+        println!(
+            "— {:.2} s 音频 / {:.0} ms，RTF {:.3}，已写入 {}",
+            seconds,
+            elapsed * 1000.0,
+            elapsed / seconds.max(0.001),
+            out.display()
+        );
         return Ok(());
     }
 
@@ -265,6 +306,21 @@ fn main() -> Result<()> {
         bail!("至少指定 --wav <文件> 或 --mic（--help 看用法）");
     }
 
+    Ok(())
+}
+
+fn write_wav(path: &std::path::Path, samples: &[f32], sample_rate: u32) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)?;
+    for sample in samples {
+        writer.write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+    }
+    writer.finalize()?;
     Ok(())
 }
 

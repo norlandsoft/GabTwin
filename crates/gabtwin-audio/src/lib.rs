@@ -7,7 +7,7 @@
 //! - 采样率转换交给 sherpa-onnx（`accept_waveform` 接受任意采样率），
 //!   所以这里先不做 rubato。
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -233,4 +233,202 @@ pub fn recv_chunk(
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     got
+}
+
+// ---------- 播放 ----------
+
+use std::collections::VecDeque;
+use std::sync::mpsc;
+use std::sync::Mutex;
+use std::time::Duration;
+
+pub enum SpeakerCommand {
+    Play(Vec<f32>),
+    Clear,
+    Quit,
+}
+
+/// 播放句柄。真正的 cpal 输出流在自己的线程里，句柄只负责投递音频。
+pub struct SpeakerHandle {
+    tx: mpsc::Sender<SpeakerCommand>,
+    pub sample_rate: u32,
+}
+
+impl SpeakerHandle {
+    pub fn push(&self, samples: Vec<f32>) {
+        let _ = self.tx.send(SpeakerCommand::Play(samples));
+    }
+    pub fn clear(&self) {
+        let _ = self.tx.send(SpeakerCommand::Clear);
+    }
+}
+
+/// 启动默认输出设备；返回句柄和实际输出采样率。
+pub fn start_speaker() -> Result<SpeakerHandle> {
+    let (tx, rx) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let buffer = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        match build_output_stream(buffer.clone()) {
+            Ok((stream, rate)) => {
+                let _ = ready_tx.send(Ok(rate));
+                while let Ok(command) = rx.recv() {
+                    match command {
+                        SpeakerCommand::Play(samples) => {
+                            if let Ok(mut queue) = buffer.lock() {
+                                queue.extend(samples);
+                            }
+                        }
+                        SpeakerCommand::Clear => {
+                            if let Ok(mut queue) = buffer.lock() {
+                                queue.clear();
+                            }
+                        }
+                        SpeakerCommand::Quit => break,
+                    }
+                }
+                drop(stream);
+            }
+            Err(err) => {
+                let _ = ready_tx.send(Err(format!("{err:#}")));
+            }
+        }
+    });
+
+    match ready_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(rate)) => Ok(SpeakerHandle {
+            tx,
+            sample_rate: rate,
+        }),
+        Ok(Err(message)) => Err(anyhow!(message)),
+        Err(_) => Err(anyhow!("启动音频输出超时")),
+    }
+}
+
+fn build_output_stream(
+    buffer: Arc<Mutex<VecDeque<f32>>>,
+) -> Result<(cpal::Stream, u32), anyhow::Error> {
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow!("没有可用的默认输出设备"))?;
+    let supported = device
+        .default_output_config()
+        .context("读取默认输出配置失败")?;
+    let sample_format = supported.sample_format();
+    let config: cpal::StreamConfig = supported.config();
+    let channels = config.channels as usize;
+    let rate = config.sample_rate;
+    let err_fn = |err| eprintln!("[audio] 输出流错误：{err}");
+
+    let stream = match sample_format {
+        SampleFormat::F32 => {
+            let b = buffer.clone();
+            device.build_output_stream(
+                config.clone(),
+                move |data: &mut [f32], _| fill_f32(data, channels, &b),
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::I16 => {
+            let b = buffer.clone();
+            device.build_output_stream(
+                config.clone(),
+                move |data: &mut [i16], _| fill_i16(data, channels, &b),
+                err_fn,
+                None,
+            )?
+        }
+        SampleFormat::U16 => {
+            let b = buffer.clone();
+            device.build_output_stream(
+                config.clone(),
+                move |data: &mut [u16], _| fill_u16(data, channels, &b),
+                err_fn,
+                None,
+            )?
+        }
+        other => bail!("暂不支持的输出采样格式 {other:?}"),
+    };
+    stream.play()?;
+    Ok((stream, rate))
+}
+
+fn pop_samples(buffer: &Arc<Mutex<VecDeque<f32>>>, frames: usize) -> Option<Vec<f32>> {
+    let mut queue = buffer.try_lock().ok()?;
+    Some(
+        (0..frames)
+            .map(|_| queue.pop_front().unwrap_or(0.0))
+            .collect(),
+    )
+}
+
+fn fill_f32(data: &mut [f32], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+    if channels == 0 {
+        return;
+    }
+    let frames = data.len() / channels;
+    let Some(values) = pop_samples(buffer, frames) else {
+        data.fill(0.0);
+        return;
+    };
+    for (i, value) in values.into_iter().enumerate() {
+        for c in 0..channels {
+            data[i * channels + c] = value;
+        }
+    }
+}
+
+fn fill_i16(data: &mut [i16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+    if channels == 0 {
+        return;
+    }
+    let frames = data.len() / channels;
+    let Some(values) = pop_samples(buffer, frames) else {
+        data.fill(0);
+        return;
+    };
+    for (i, value) in values.into_iter().enumerate() {
+        let sample = (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        for c in 0..channels {
+            data[i * channels + c] = sample;
+        }
+    }
+}
+
+fn fill_u16(data: &mut [u16], channels: usize, buffer: &Arc<Mutex<VecDeque<f32>>>) {
+    if channels == 0 {
+        return;
+    }
+    let frames = data.len() / channels;
+    let Some(values) = pop_samples(buffer, frames) else {
+        data.fill(32768);
+        return;
+    };
+    for (i, value) in values.into_iter().enumerate() {
+        let sample = (((value.clamp(-1.0, 1.0) * 0.5) + 0.5) * u16::MAX as f32) as u16;
+        for c in 0..channels {
+            data[i * channels + c] = sample;
+        }
+    }
+}
+
+/// 线性重采样（TTS 22050 → 设备 48000 这类）。语音够用，不做抗混叠。
+pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
+    if input.is_empty() || from == 0 || to == 0 || from == to {
+        return input.to_vec();
+    }
+    let ratio = to as f64 / from as f64;
+    let out_len = (input.len() as f64 * ratio).round() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let pos = i as f64 / ratio;
+        let idx = pos.floor() as usize;
+        let frac = (pos - idx as f64) as f32;
+        let a = input.get(idx).copied().unwrap_or(0.0);
+        let b = input.get(idx + 1).copied().unwrap_or(a);
+        out.push(a + (b - a) * frac);
+    }
+    out
 }

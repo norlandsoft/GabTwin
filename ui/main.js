@@ -21,10 +21,19 @@ const STATE_TEXT = {
   replaying: "回放中",
   thinking: "思考中",
   replying: "回复中",
+  speaking: "说话中",
   error: "错误",
 };
 
-const ACTIVE = new Set(["loading", "listening", "replaying", "thinking", "replying"]);
+const ACTIVE = new Set(["loading", "listening", "replaying", "thinking", "replying", "speaking"]);
+let speakingTimer = null;
+
+function clearSpeakingTimer() {
+  if (speakingTimer) {
+    clearTimeout(speakingTimer);
+    speakingTimer = null;
+  }
+}
 
 function setStatus(state, message) {
   const el = document.querySelector(".status");
@@ -58,7 +67,9 @@ function clearAll() {
   $("first").textContent = "—";
   $("endpoint").textContent = "—";
   $("ttft").textContent = "—";
+  $("firstAudio").textContent = "—";
   $("rtf").textContent = "—";
+  clearSpeakingTimer();
   hint.classList.remove("error");
   hint.textContent = "按「开始聆听」，然后说话。它会在你说完后接话。";
   hint.style.display = "";
@@ -174,6 +185,7 @@ function onSessionEvent(payload) {
       renderLive(payload.text, payload.onset_ms);
       break;
     case "segment":
+      clearSpeakingTimer();
       appendUser(payload.text);
       live.innerHTML = "";
       lastPartial = "";
@@ -199,6 +211,22 @@ function onSessionEvent(payload) {
       setStatus("error", payload.message);
       break;
   }
+}
+
+function onTtsStart(payload) {
+  if (payload.first_audio_ms != null) {
+    $("firstAudio").textContent = `${payload.first_audio_ms} ms`;
+  }
+  setStatus("speaking");
+}
+
+function onTtsQueued(payload) {
+  clearSpeakingTimer();
+  const wait = Math.max(300, (payload.duration_ms || 0) + 150);
+  speakingTimer = setTimeout(() => {
+    speakingTimer = null;
+    setStatus(audioState === "idle" ? "idle" : audioState);
+  }, wait);
 }
 
 function onLlmThinking(payload) {
@@ -231,6 +259,7 @@ function onLlmDone(payload) {
 }
 
 function onLlmError(payload) {
+  clearSpeakingTimer();
   if (payload.turn_id === 0) {
     if (!llmMissingShown) {
       llmMissingShown = true;
@@ -275,6 +304,14 @@ if (!invoke) {
   listen("llm-done", (e) => onLlmDone(e.payload || {}));
   listen("llm-error", (e) => onLlmError(e.payload || {}));
   listen("llm-cancelled", (e) => onLlmCancelled(e.payload || {}));
+  listen("tts-start", (e) => onTtsStart(e.payload || {}));
+  listen("tts-queued", (e) => onTtsQueued(e.payload || {}));
+  listen("tts-error", (e) => {
+    const message = (e.payload || {}).message || "TTS 不可用";
+    hint.style.display = "";
+    hint.classList.add("error");
+    hint.textContent = message;
+  });
 
   $("start").addEventListener("click", () => {
     clearAll();

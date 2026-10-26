@@ -1,13 +1,15 @@
 use chrono::Local;
+use gabtwin_audio::{resample_linear, start_speaker};
 use gabtwin_llm::{spoken_system_prompt, Dialog, LlmClient, LlmConfig};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
     run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
+use gabtwin_tts::{ClauseSplitter, Tts, TtsConfig};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 带时间戳的诊断日志。写到 stderr，启动脚本会把它落进 app.log。
@@ -31,6 +33,197 @@ fn install_signal_logging() {
             std::process::exit(0);
         }
     });
+}
+
+enum TtsCommand {
+    Clause { generation: u64, text: String },
+    Stop,
+    Flush,
+}
+
+struct TtsState {
+    tx: Mutex<Option<mpsc::Sender<TtsCommand>>>,
+    generation: Arc<AtomicU64>,
+    splitter: Mutex<ClauseSplitter>,
+    turn_started: Arc<Mutex<Option<Instant>>>,
+    /// 播放期间置位，会话层据此屏蔽麦克风输入。
+    mute: Arc<AtomicBool>,
+}
+
+impl TtsState {
+    fn new(app: AppHandle) -> Self {
+        let generation = Arc::new(AtomicU64::new(0));
+        let turn_started = Arc::new(Mutex::new(None));
+        let mute = Arc::new(AtomicBool::new(false));
+        let tx = start_tts_worker(app, generation.clone(), turn_started.clone(), mute.clone());
+        Self {
+            tx: Mutex::new(Some(tx)),
+            generation,
+            splitter: Mutex::new(ClauseSplitter::new()),
+            turn_started,
+            mute,
+        }
+    }
+
+    fn stop(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(TtsCommand::Stop);
+        }
+    }
+
+    fn begin_turn(&self) {
+        self.stop();
+        self.splitter.lock().unwrap().reset();
+        *self.turn_started.lock().unwrap() = Some(Instant::now());
+    }
+
+    fn feed(&self, delta: &str) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let clauses = self.splitter.lock().unwrap().push(delta);
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            for text in clauses {
+                let _ = tx.send(TtsCommand::Clause { generation, text });
+            }
+        }
+    }
+
+    fn flush(&self) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let last = self.splitter.lock().unwrap().flush();
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            if let Some(text) = last {
+                let _ = tx.send(TtsCommand::Clause { generation, text });
+            }
+            let _ = tx.send(TtsCommand::Flush);
+        }
+    }
+}
+
+fn tts_model_dir() -> PathBuf {
+    std::env::var_os("GABTWIN_TTS_MODEL_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| gabtwin_home().join("models").join("vits-zh-ll"))
+}
+
+fn start_tts_worker(
+    app: AppHandle,
+    generation: Arc<AtomicU64>,
+    turn_started: Arc<Mutex<Option<Instant>>>,
+    mute: Arc<AtomicBool>,
+) -> mpsc::Sender<TtsCommand> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let dir = tts_model_dir();
+        let tts = match Tts::new(&TtsConfig::new(dir.clone())) {
+            Ok(tts) => {
+                // 第一次合成会初始化内部缓冲，明显更慢；启动时先空跑一句。
+                let warm = Instant::now();
+                let _ = tts.synthesize("你好");
+                log(format!(
+                    "TTS 就绪：{} Hz（预热 {} ms）",
+                    tts.sample_rate(),
+                    warm.elapsed().as_millis()
+                ));
+                tts
+            }
+            Err(err) => {
+                log(format!("TTS 不可用：{err:#}"));
+                let _ = app.emit(
+                    "tts-error",
+                    serde_json::json!({ "message": format!("TTS 不可用：{err:#}") }),
+                );
+                return;
+            }
+        };
+        let speaker = match start_speaker() {
+            Ok(speaker) => speaker,
+            Err(err) => {
+                log(format!("音频输出不可用：{err:#}"));
+                let _ = app.emit(
+                    "tts-error",
+                    serde_json::json!({ "message": format!("音频输出不可用：{err:#}") }),
+                );
+                return;
+            }
+        };
+        log(format!(
+            "音频输出：{} Hz（TTS {} Hz，线性重采样）",
+            speaker.sample_rate,
+            tts.sample_rate()
+        ));
+
+        let mut started = false;
+        let mut queued_ms: u64 = 0;
+        while let Ok(command) = rx.recv() {
+            match command {
+                TtsCommand::Stop => {
+                    speaker.clear();
+                    started = false;
+                    queued_ms = 0;
+                    mute.store(false, Ordering::SeqCst);
+                }
+                TtsCommand::Flush => {
+                    log(format!("TTS 排队 {} ms", queued_ms));
+                    let _ = app.emit(
+                        "tts-queued",
+                        serde_json::json!({ "duration_ms": queued_ms }),
+                    );
+                }
+                TtsCommand::Clause {
+                    generation: g,
+                    text,
+                } => {
+                    if g != generation.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let tick = Instant::now();
+                    let samples = match tts.synthesize(&text) {
+                        Ok(samples) => samples,
+                        Err(err) => {
+                            log(format!("TTS 合成失败：{err:#}"));
+                            let _ = app.emit(
+                                "tts-error",
+                                serde_json::json!({ "message": format!("{err:#}") }),
+                            );
+                            continue;
+                        }
+                    };
+                    if g != generation.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let tts_rate = tts.sample_rate();
+                    let ms = samples.len() as u64 * 1000 / tts_rate.max(1) as u64;
+                    let audio = resample_linear(&samples, tts_rate, speaker.sample_rate);
+                    queued_ms += ms;
+                    let first = !started;
+                    started = true;
+                    mute.store(true, Ordering::SeqCst);
+                    speaker.push(audio);
+                    if first {
+                        let first_audio_ms = turn_started
+                            .lock()
+                            .ok()
+                            .and_then(|value| *value)
+                            .map(|at| at.elapsed().as_millis() as u64);
+                        log(format!(
+                            "TTS 首音 {:?} ms（首句合成 {} ms）",
+                            first_audio_ms,
+                            tick.elapsed().as_millis()
+                        ));
+                        let _ = app.emit(
+                            "tts-start",
+                            serde_json::json!({
+                                "first_audio_ms": first_audio_ms,
+                                "clause_ms": tick.elapsed().as_millis() as u64,
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+    });
+    tx
 }
 
 struct LlmState {
@@ -126,6 +319,9 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     *state.stop.lock().unwrap() = stop.clone();
 
     let mut cfg = SessionConfig::new(model_dir());
+    if let Some(tts) = app.try_state::<TtsState>() {
+        cfg.mute = Some(tts.mute.clone());
+    }
     if let Ok(device) = std::env::var("GABTWIN_DEVICE") {
         if !device.is_empty() {
             cfg.capture.device_name = Some(device);
@@ -198,6 +394,9 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
 
 /// 一句用户话定稿后，发起一轮流式回复。新一轮会取消上一轮。
 fn start_llm_turn(app: &AppHandle, text: String) {
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.begin_turn();
+    }
     let state = app.state::<LlmState>();
     let Some(client) = state.client.clone() else {
         let _ = app.emit(
@@ -229,15 +428,24 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 "llm-delta",
                 serde_json::json!({ "turn_id": turn_id, "text": delta }),
             );
+            if let Some(tts) = emit_target.try_state::<TtsState>() {
+                tts.feed(delta);
+            }
         });
 
         match result {
             Ok(r) if r.cancelled => {
+                if let Some(tts) = app_handle.try_state::<TtsState>() {
+                    tts.stop();
+                }
                 let _ = app_handle.emit("llm-cancelled", serde_json::json!({ "turn_id": turn_id }));
             }
             Ok(r) if !r.text.trim().is_empty() => {
                 if let Some(state) = app_handle.try_state::<LlmState>() {
                     state.dialog.lock().unwrap().push_assistant(r.text.clone());
+                }
+                if let Some(tts) = app_handle.try_state::<TtsState>() {
+                    tts.flush();
                 }
                 let _ = app_handle.emit(
                     "llm-done",
@@ -256,6 +464,9 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 );
             }
             Err(err) => {
+                if let Some(tts) = app_handle.try_state::<TtsState>() {
+                    tts.stop();
+                }
                 log(format!("LLM 失败：{err:#}"));
                 let _ = app_handle.emit(
                     "llm-error",
@@ -293,6 +504,9 @@ fn stop_listening(app: AppHandle) {
     }
     if let Some(llm) = app.try_state::<LlmState>() {
         llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+    }
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.stop();
     }
 }
 
@@ -337,6 +551,8 @@ pub fn run() {
             llm_status
         ])
         .setup(|app| {
+            app.manage(TtsState::new(app.handle().clone()));
+
             // 验证用：不点按钮也能自动回放示例音频（截图 / 回归用）
             if std::env::var_os("GABTWIN_AUTOSTART").is_some() {
                 let handle = app.handle().clone();

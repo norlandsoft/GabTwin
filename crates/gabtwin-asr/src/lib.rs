@@ -222,6 +222,12 @@ impl Asr {
         out
     }
 
+    /// 丢掉当前这句话的假设，重新开始（用于播放期间屏蔽输入）。
+    pub fn reset(&mut self) {
+        self.recognizer.reset(&self.stream);
+        self.last_text.clear();
+    }
+
     /// 音频结束：把尾部还没解码的部分冲出来。
     pub fn finish(&mut self) -> Vec<AsrUpdate> {
         self.stream.input_finished();

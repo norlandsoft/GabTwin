@@ -98,6 +98,8 @@ pub struct SessionConfig {
     pub warmup_ms: u32,
     /// 句末定稿用的离线识别器（可选）。设了就用它替换流式的句末文本。
     pub offline: Option<OfflineAsrConfig>,
+    /// TTS 播放期间置位：不喂识别器，避免把自己的声音当成用户说话。
+    pub mute: Option<Arc<AtomicBool>>,
 }
 
 impl SessionConfig {
@@ -109,6 +111,7 @@ impl SessionConfig {
             onset_rms: 0.01,
             warmup_ms: 0,
             offline: None,
+            mute: None,
         }
     }
 }
@@ -290,6 +293,7 @@ where
     let mut pending: Vec<f32> = Vec::with_capacity(chunk_samples * 4);
     let mut stats = Stats::new(sr);
     let mut level_at = Instant::now();
+    let mut was_muted = false;
 
     while !stop.load(Ordering::Relaxed) {
         let got = recv_chunk(
@@ -302,6 +306,27 @@ where
             continue;
         }
         pending.extend_from_slice(&scratch[..got]);
+
+        // TTS 正在播放：丢弃音频，并清掉识别器里的残留假设。
+        let muted = cfg
+            .mute
+            .as_ref()
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        if muted {
+            pending.clear();
+            segment_audio.clear();
+            if !was_muted {
+                asr.reset();
+                was_muted = true;
+            }
+            continue;
+        }
+        if was_muted {
+            asr.reset();
+            segment_audio.clear();
+            was_muted = false;
+        }
 
         while pending.len() >= chunk_samples {
             let frame: Vec<f32> = pending.drain(..chunk_samples).collect();

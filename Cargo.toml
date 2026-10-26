@@ -5,6 +5,7 @@ members = [
     "crates/gabtwin-asr",
     "crates/gabtwin-session",
     "crates/gabtwin-llm",
+    "crates/gabtwin-tts",
     "crates/gabtwin-probe",
     "src-tauri",
 ]

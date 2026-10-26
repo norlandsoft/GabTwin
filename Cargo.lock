@@ -1280,8 +1280,10 @@ dependencies = [
  "anyhow",
  "chrono",
  "dotenvy",
+ "gabtwin-audio",
  "gabtwin-llm",
  "gabtwin-session",
+ "gabtwin-tts",
  "serde",
  "serde_json",
  "signal-hook",
@@ -1325,6 +1327,8 @@ dependencies = [
  "anyhow",
  "clap",
  "gabtwin-session",
+ "gabtwin-tts",
+ "hound",
  "serde_json",
 ]
 
@@ -1337,6 +1341,14 @@ dependencies = [
  "gabtwin-audio",
  "hound",
  "serde",
+]
+
+[[package]]
+name = "gabtwin-tts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sherpa-onnx",
 ]
 
 [[package]]
