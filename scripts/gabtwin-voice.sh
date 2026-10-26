@@ -15,6 +15,12 @@ list() {
 
 name="${1:-list}"
 if [[ "$name" == "list" ]]; then list; exit 0; fi
+if [[ "$name" == "off" ]]; then
+  [[ -f "$TARGET/reference.wav" ]] && mv "$TARGET/reference.wav" "$TARGET/reference.wav.disabled"
+  [[ -f "$TARGET/reference.txt" ]] && mv "$TARGET/reference.txt" "$TARGET/reference.txt.disabled"
+  echo "已停用参考音：应用将回退 Matcha 内置音色（重启生效）"
+  exit 0
+fi
 if [[ ! -f "$VOICES/$name/reference.wav" ]]; then
   echo "没有这个音色：${name}" >&2; list >&2; exit 1
 fi
