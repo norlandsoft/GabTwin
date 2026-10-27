@@ -46,7 +46,7 @@ LLM 流式 delta
 
 | 变量 | 作用 |
 |---|---|
-| `GABTWIN_TTS_MODEL_DIR` | TTS 模型目录（默认 `$GABTWIN_HOME/models/matcha-zh-en`） |
+| `GABTWIN_TTS_MODEL_DIR` | TTS 模型目录（默认 `$GABTWIN_MODELS_DIR/tts/matcha-zh-en`） |
 | `GABTWIN_ENGINE=streaming` | 只影响句末定稿，不影响 TTS |
 
 ## 单独验 TTS
@@ -127,7 +127,7 @@ afplay /tmp/kokoro-3.wav            # Kokoro（更自然但太慢）
 afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 ```
 
-`Matcha` 的模型在 `~/Library/Application Support/GabTwin/models/matcha-zh-en/`；
+`Matcha` 的模型在 `/opt/GabTwin/models/tts/matcha-zh-en/`；
 它的声码器 `vocos-16khz-univ.onnx` 要从 GitHub release 单独下（下载慢，已在本机）。
 选定后把 `GABTWIN_TTS_MODEL_DIR` 指过去即可，应用会自动识别 VITS / Matcha / Kokoro。
 

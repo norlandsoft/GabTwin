@@ -2,8 +2,8 @@ use chrono::Local;
 use gabtwin_audio::{resample_linear, start_speaker};
 use gabtwin_llm::{spoken_system_prompt, Dialog, LlmClient, LlmConfig};
 use gabtwin_session::{
-    default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
-    run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
+    default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
+    replay_wav, run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
 use gabtwin_tts::{ClauseSplitter, GlmTts, RemoteTts, Tts, TtsConfig};
 use std::path::PathBuf;
@@ -126,11 +126,12 @@ fn tts_model_dir() -> PathBuf {
     }
     // 有参考音就优先用 ZipVoice 克隆音色，否则用 Matcha。
     let home = gabtwin_home();
-    let zipvoice = home.join("models").join("zipvoice-zh-en");
+    let root = models_root();
+    let zipvoice = root.join("tts").join("zipvoice-zh-en");
     if zipvoice.is_dir() && home.join("tts/reference.wav").is_file() {
         zipvoice
     } else {
-        home.join("models").join("matcha-zh-en")
+        root.join("tts").join("matcha-zh-en")
     }
 }
 

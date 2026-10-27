@@ -17,7 +17,7 @@
 #   ./scripts/fetch-model.sh --check          # 只校验已下载的文件
 #
 # 环境变量：
-#   GABTWIN_HOME         模型根目录，默认 ~/Library/Application Support/GabTwin
+#   GABTWIN_MODELS_DIR   模型根目录，默认 <repo>/models（asr/tts/llm）
 #   GABTWIN_HF_MIRROR    镜像地址，默认 https://hf-mirror.com
 #   GABTWIN_FETCH_JOBS   并发数，默认 4
 
@@ -27,7 +27,9 @@ set -euo pipefail
 unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export NO_PROXY='*' no_proxy='*'
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
+MODELS_ROOT="${GABTWIN_MODELS_DIR:-$ROOT/models}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
 UA='gabtwin/0.1 (local, direct)'
@@ -45,6 +47,13 @@ repo_of() {
     kokoro-zh) echo "csukuangfj/kokoro-int8-multi-lang-v1_1" ;;
     matcha-zh-en) echo "csukuangfj/matcha-icefall-zh-en" ;;
     *) return 1 ;;
+  esac
+}
+
+kind_of() {
+  case "$1" in
+    tts|kokoro-zh|matcha-zh-en) echo "tts" ;;
+    *) echo "asr" ;;
   esac
 }
 
@@ -204,7 +213,7 @@ fetch_model() {
   local model="$1"
   local repo dir
   repo="$(repo_of "$model")" || { echo "未知模型：$model" >&2; return 1; }
-  dir="$GABTWIN_HOME/models/$(dir_of "$model")"
+  dir="$MODELS_ROOT/$(kind_of "$model")/$(dir_of "$model")"
 
   mkdir -p "$dir/test_wavs"
   echo
@@ -279,7 +288,7 @@ fetch_model() {
 check_model() {
   local model="$1" repo dir name want bad=0
   repo="$(repo_of "$model")" || return 1
-  dir="$GABTWIN_HOME/models/$(dir_of "$model")"
+  dir="$MODELS_ROOT/$(kind_of "$model")/$(dir_of "$model")"
   echo
   echo "校验 $model"
   while IFS=: read -r name want; do
@@ -338,4 +347,4 @@ fi
 
 echo
 echo "完成。校验：./scripts/fetch-model.sh --check"
-echo "试跑：cargo run -p gabtwin-probe -- --model-dir \"$GABTWIN_HOME/models/$(dir_of "$TARGET" 2>/dev/null || echo streaming-zipformer-zh-int8-2025-06-30)\" --wav \"$GABTWIN_HOME/models/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav\""
+echo "试跑：cargo run -p gabtwin-probe -- --model-dir \"$MODELS_ROOT/asr/$(dir_of "$TARGET" 2>/dev/null || echo streaming-zipformer-zh-int8-2025-06-30)\" --wav \"$MODELS_ROOT/asr/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav\""

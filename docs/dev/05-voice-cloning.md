@@ -12,7 +12,7 @@
 ## 模型
 
 ```text
-~/Library/Application Support/GabTwin/models/zipvoice-zh-en/
+/opt/GabTwin/models/tts/zipvoice-zh-en/
   encoder.int8.onnx     5.3 MB
   decoder.int8.onnx     119 MB
   tokens.txt / lexicon.txt / espeak-ng-data/

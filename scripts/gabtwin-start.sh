@@ -17,7 +17,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
-MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_HOME/models/streaming-paraformer-bilingual-zh-en}"
+export GABTWIN_MODELS_DIR="$ROOT/models"
+MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_MODELS_DIR/asr/streaming-paraformer-bilingual-zh-en}"
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
 LOG_DIR="$GABTWIN_HOME/logs"
@@ -57,11 +58,11 @@ if [[ -f "$ROOT/.env" ]]; then
   fi
 fi
 
-OFFLINE_DIR="$GABTWIN_HOME/models/sense-voice-zh-en-ja-ko-yue-2024-07-17"
+OFFLINE_DIR="$GABTWIN_MODELS_DIR/asr/sense-voice-zh-en-ja-ko-yue-2024-07-17"
 if [[ ! -d "$OFFLINE_DIR" ]]; then
   echo "提示：未找到 SenseVoice 定稿模型，句末会用流式结果（./scripts/fetch-model.sh sensevoice）"
 fi
-TTS_DIR="$GABTWIN_HOME/models/matcha-zh-en"
+TTS_DIR="$GABTWIN_MODELS_DIR/tts/matcha-zh-en"
 if [[ ! -d "$TTS_DIR" ]]; then
   echo "提示：未找到 TTS 模型，回复只会显示文字（需要 matcha-zh-en；见 docs/dev/04-tts.md）"
 fi
@@ -75,11 +76,11 @@ fi
 
 # 3. LLM：默认本地 mlx-lm server（GABTWIN_LLM=deepseek 走云端）
 if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
-  if [[ -d "$ROOT/models/qwen2.5-7b-4bit" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
+  if [[ -d "$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1; then
       echo "启动本地 LLM（Qwen2.5-7B-MLX）…"
       nohup "$ROOT/.venv-mlx/bin/mlx_lm.server" \
-        --model "$ROOT/models/qwen2.5-7b-4bit" \
+        --model "$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit" \
         --host 127.0.0.1 --port 8080 >> "$LOG_DIR/llm-server.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/llm-server.pid"
       for _ in $(seq 1 180); do
@@ -89,10 +90,10 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
     fi
     export GABTWIN_LLM_BASE="http://127.0.0.1:8080/v1"
     export GABTWIN_LLM_KEY="${GABTWIN_LLM_KEY:-local}"
-    export GABTWIN_LLM_MODEL="$ROOT/models/qwen2.5-7b-4bit"
+    export GABTWIN_LLM_MODEL="$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit"
     curl -s --max-time 120 http://127.0.0.1:8080/v1/chat/completions \
       -H 'Content-Type: application/json' \
-      -d "{\"model\":\"$ROOT/models/qwen2.5-7b-4bit\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":1}" >/dev/null 2>&1 || true
+      -d "{\"model\":\"$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":1}" >/dev/null 2>&1 || true
     echo "LLM：本地 Qwen2.5-7B（127.0.0.1:8080）"
   else
     echo "提示：本地 LLM 模型缺失，回退 .env 的 LLM 配置"
@@ -101,11 +102,11 @@ fi
 
 # 3. TTS 引擎：默认 IndexTTS sidecar（GABTWIN_TTS=local 回退本地）
 if [[ "${GABTWIN_TTS:-local}" == "indextts" ]]; then
-  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$ROOT/models/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
+  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1; then
       echo "启动 IndexTTS sidecar…"
       nohup "$ROOT/.venv-mlx/bin/python" "$ROOT/scripts/index_tts_sidecar.py" \
-        --model-dir "$ROOT/models/index-tts-2.5-mlx" \
+        --model-dir "$GABTWIN_MODELS_DIR/tts/index-tts-2.5-mlx" \
         --ref "$GABTWIN_HOME/tts/index-ref.wav" \
         --port 8798 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/tts-sidecar.pid"

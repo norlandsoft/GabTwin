@@ -118,3 +118,20 @@
 | 贴图 | 2K，PBR，皮肤可用预积分 SSS |
 | 动画 | idle 呼吸、眨眼、点头、摇头 |
 | 目标 | 720p / 30 fps，M1 Max GPU 占用 ≤ 50% |
+
+
+## 目录布局
+
+模型统一放在仓库的 `models/`（gitignore）：
+
+```text
+models/
+  asr/   streaming-paraformer-bilingual-zh-en、sense-voice-*、streaming-zipformer-*
+  tts/   zipvoice-zh-en、matcha-zh-en、vits-zh-ll、kokoro-*、index-tts-2.5-mlx、breeze-*
+  llm/   qwen2.5-7b-4bit
+```
+
+- `GABTWIN_MODELS_DIR` 可覆盖根目录；应用默认取仓库 `models/`，找不到时回退
+  `$GABTWIN_HOME/models`；
+- `./scripts/models.sh` 按 asr/tts/llm 打印每个模型的占用和总计；
+- `./scripts/fetch-model.sh` 的下载目录已改为 `models/asr` / `models/tts`。

@@ -31,12 +31,24 @@ pub fn gabtwin_home() -> PathBuf {
         .join("GabTwin")
 }
 
+/// 模型根目录：GABTWIN_MODELS_DIR > 仓库 models/ > $GABTWIN_HOME/models。
+pub fn models_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("GABTWIN_MODELS_DIR") {
+        return PathBuf::from(dir);
+    }
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models");
+    if repo.is_dir() {
+        return repo;
+    }
+    gabtwin_home().join("models")
+}
+
 pub fn default_asr_model_dir() -> PathBuf {
-    gabtwin_home().join("models").join(MODEL_DIR_NAME)
+    models_root().join("asr").join(MODEL_DIR_NAME)
 }
 
 pub fn default_offline_model_dir() -> PathBuf {
-    gabtwin_home().join("models").join(OFFLINE_MODEL_DIR_NAME)
+    models_root().join("asr").join(OFFLINE_MODEL_DIR_NAME)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

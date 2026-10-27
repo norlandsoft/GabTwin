@@ -119,7 +119,7 @@ UI 的"首 token"读数就是这一段；mock 下是 1 ms，不要拿它当真�
   `/v1/chat/completions`（SSE 流式）；**请求里的 `model` 必须是本地绝对路径**，
   否则 server 会把它当成 HF repo 去拉；
 - 模型：`mlx-community/Qwen2.5-7B-Instruct-4bit`，4.3 GB，放在
-  `models/qwen2.5-7b-4bit/`；
+  `models/llm/qwen2.5-7b-4bit/`；
 - 启动脚本默认：
   ```bash
   ./scripts/gabtwin-start.sh
