@@ -283,6 +283,7 @@ pub fn spoken_system_prompt(persona: &str) -> String {
     format!(
         "{persona}\n\n\
 你说的是口语，不是书面语。规则：\n\
+- 始终用中文回答，除非用户明确要求英文；
 - 一次最多两三句，先接话再展开；\n\
 - 不要用 Markdown、列表、标题、表情符号；\n\
 - 不要念出括号里的动作或旁白；\n\

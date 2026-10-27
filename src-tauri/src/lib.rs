@@ -58,6 +58,8 @@ struct TtsState {
     last_reply: Arc<Mutex<(String, Option<Instant>)>>,
     /// 扬声器实际播出的参考信号，供 AEC3 使用。
     render: RenderTap,
+    /// 最近一次麦克风 RMS，用于插话门限。
+    level: Arc<Mutex<f32>>,
 }
 
 impl TtsState {
@@ -70,6 +72,7 @@ impl TtsState {
         let label = Arc::new(Mutex::new(("—".to_string(), String::new())));
         let last_reply = Arc::new(Mutex::new((String::new(), None)));
         let render = RenderTap::new();
+        let level = Arc::new(Mutex::new(0.0));
         let tx = start_tts_worker(
             app,
             generation.clone(),
@@ -97,6 +100,7 @@ impl TtsState {
             label,
             last_reply,
             render,
+            level,
         }
     }
 
@@ -426,6 +430,7 @@ fn start_tts_worker(
                         reply_text.clear();
                     }
                     reply_text.push_str(&text);
+                    *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
                     queued_ms += ms;
                     let first = !started;
                     started = true;
@@ -463,6 +468,36 @@ fn start_tts_worker(
     tx
 }
 
+/// 低能量噪声/短英文填充词导致的 ASR 幻觉。
+fn is_hallucination(text: &str) -> bool {
+    let normalized: String = text
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+    let has_cjk = text
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    if !has_cjk {
+        const FILLERS: &[&str] = &[
+            "the", "i", "yeah", "what", "you", "thankyou", "hmm", "mm", "ah", "oh", "okay",
+            "ok", "yes", "no",
+        ];
+        if FILLERS.contains(&normalized.as_str()) {
+            return true;
+        }
+        if normalized.chars().count() <= 2 {
+            return true;
+        }
+    } else if normalized.chars().count() <= 1 {
+        return true;
+    }
+    false
+}
+
 /// 判断识别结果是否只是刚播完的 TTS 残余回声（字符 bigram Jaccard）。
 fn is_tts_echo(text: &str, state: &TtsState) -> bool {
     let (last, at) = state.last_reply.lock().unwrap().clone();
@@ -479,7 +514,7 @@ fn is_tts_echo(text: &str, state: &TtsState) -> bool {
     let said = norm(text);
     let last = norm(&last);
     if said.chars().count() < 4 || last.chars().count() < 4 {
-        return false;
+        return !said.is_empty() && last.contains(&said);
     }
     let grams = |value: &String| -> std::collections::HashSet<(char, char)> {
         value.chars().collect::<Vec<_>>().windows(2).map(|w| (w[0], w[1])).collect()
@@ -653,7 +688,10 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
         let emit_target = app_handle.clone();
         let llm_app = app_handle.clone();
         let mut sink = move |event: SessionEvent| {
-            if matches!(event, SessionEvent::Level { .. }) {
+            if let SessionEvent::Level { rms, .. } = &event {
+                if let Some(tts) = llm_app.try_state::<TtsState>() {
+                    *tts.level.lock().unwrap() = *rms;
+                }
                 let _ = emit_target.emit("session-event", &event);
                 return;
             }
@@ -661,13 +699,21 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             if let Err(err) = emit_target.emit("session-event", &event) {
                 log(format!("emit 失败：{err}"));
             }
-            if let SessionEvent::Partial { .. } = &event {
+            if let SessionEvent::Partial { text, .. } = &event {
                 if let Some(tts) = llm_app.try_state::<TtsState>() {
                     let barge_in = std::env::var("GABTWIN_BARGE_IN")
                         .map(|value| value == "1")
                         .unwrap_or(false);
+                    let barge_rms = std::env::var("GABTWIN_BARGE_RMS")
+                        .ok()
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .unwrap_or(0.03);
+                    let level = *tts.level.lock().unwrap();
                     if (aec_enabled || (barge_in && tts.headphones.load(Ordering::SeqCst)))
                         && tts.speaking.load(Ordering::SeqCst)
+                        && !is_hallucination(text)
+                        && !is_tts_echo(text, &tts)
+                        && level >= barge_rms
                     {
                         tts.stop();
                         if let Some(llm) = llm_app.try_state::<LlmState>() {
@@ -680,6 +726,10 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             if let SessionEvent::Segment { text, .. } = &event {
                 // 只有标点/空白的结果不要触发一轮对话。
                 if !text.chars().any(|c| c.is_alphanumeric()) {
+                    return;
+                }
+                if is_hallucination(text) {
+                    log(format!("忽略短/噪声幻觉：{text}"));
                     return;
                 }
                 if let Some(tts) = llm_app.try_state::<TtsState>() {

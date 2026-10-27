@@ -197,3 +197,13 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 
 > 合成延迟回声测试 ERLE ≈ 62 dB；真实房间的扬声器/麦克风延迟不同，
 > 若仍有残留，先调 `aec3` 的 `initial_delay_ms`（当前 0）或报告具体设备。
+
+
+### 噪声幻觉与误插话
+
+- 段级能量门：少于 `GABTWIN_MIN_SPEECH_MS`（默认 250 ms）或 RMS 低于
+  `GABTWIN_MIN_SPEECH_RMS`（默认 0.008）的段落不送定稿；
+- 短/填充词过滤：`The.`、`I.`、`Yeah.`、`What.`、单字中文等直接丢弃；
+- 语音插话要求：部分结果不是幻觉、不是 TTS 回声、麦克风电平 ≥
+  `GABTWIN_BARGE_RMS`（默认 0.03），避免一个字就停 TTS；
+- AEC 参考对齐：`GABTWIN_AEC_DELAY_MS`（默认 100），设备延迟大时可以调。

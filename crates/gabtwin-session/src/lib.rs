@@ -120,6 +120,10 @@ pub struct SessionConfig {
     pub mute: Option<Arc<AtomicBool>>,
     /// 播放端参考信号；Some 时启用 AEC3，麦克风可以边播边听。
     pub aec_render: Option<gabtwin_audio::RenderTap>,
+    /// 一段话至少要有这么多 RMS，否则不送定稿（挡住噪声幻觉）。
+    pub min_segment_rms: f32,
+    /// 一段话至少这么长（毫秒）。
+    pub min_segment_ms: u32,
 }
 
 impl SessionConfig {
@@ -133,6 +137,8 @@ impl SessionConfig {
             offline: None,
             mute: None,
             aec_render: None,
+            min_segment_rms: 0.008,
+            min_segment_ms: 250,
         }
     }
 }
@@ -328,7 +334,11 @@ where
     let channels = capture.channels as usize;
     let mut aec_pipeline = if cfg.aec_render.is_some() {
         let format = AudioFormat::ten_ms(16_000, 1);
-        match linear::builder(format, format).initial_delay_ms(0).build() {
+        let delay_ms = std::env::var("GABTWIN_AEC_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(100);
+        match linear::builder(format, format).initial_delay_ms(delay_ms).build() {
             Ok(pipeline) => {
                 sink(SessionEvent::Warning {
                     message: "AEC3 已启用：播放时麦克风保持开启".into(),
@@ -425,6 +435,13 @@ where
             for update in updates {
                 match update {
                     AsrUpdate::Segment(text) => {
+                        let min_samples = (sr as usize * cfg.min_segment_ms as usize) / 1000;
+                        if segment_audio.len() < min_samples
+                            || rms(&segment_audio) < cfg.min_segment_rms
+                        {
+                            segment_audio.clear();
+                            continue;
+                        }
                         let text =
                             finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
                         segment_audio.clear();
@@ -439,6 +456,13 @@ where
     for update in asr.finish() {
         match update {
             AsrUpdate::Segment(text) => {
+                let min_samples = (sr as usize * cfg.min_segment_ms as usize) / 1000;
+                if segment_audio.len() < min_samples
+                    || rms(&segment_audio) < cfg.min_segment_rms
+                {
+                    segment_audio.clear();
+                    continue;
+                }
                 let text = finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
                 segment_audio.clear();
                 stats.on_update(AsrUpdate::Segment(text), &mut sink);
@@ -562,6 +586,13 @@ where
     for update in asr.finish() {
         match update {
             AsrUpdate::Segment(text) => {
+                let min_samples = (sr as usize * cfg.min_segment_ms as usize) / 1000;
+                if segment_audio.len() < min_samples
+                    || rms(&segment_audio) < cfg.min_segment_rms
+                {
+                    segment_audio.clear();
+                    continue;
+                }
                 let text = finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
                 segment_audio.clear();
                 stats.on_update(AsrUpdate::Segment(text), &mut sink);
