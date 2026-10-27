@@ -194,7 +194,7 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "glm".to_string());
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "local".to_string());
         let mut synth = match mode.as_str() {
             "glm" => {
                 let key = std::env::var("ZHIPU_API_KEY")
