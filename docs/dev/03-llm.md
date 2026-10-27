@@ -115,8 +115,9 @@ UI 的"首 token"读数就是这一段；mock 下是 1 ms，不要拿它当真�
 
 > 2026-10-27：聊天默认切到本地，不再依赖 DeepSeek。云端只保留为可选回退。
 
-- 运行时：`mlx-lm 0.32`，`mlx_lm server` 提供 OpenAI 兼容的
-  `/v1/chat/completions`（SSE 流式）；
+- 运行时：`mlx-lm 0.32`，经典入口 `mlx_lm.server`（启动时加载权重）提供 OpenAI 兼容的
+  `/v1/chat/completions`（SSE 流式）；**请求里的 `model` 必须是本地绝对路径**，
+  否则 server 会把它当成 HF repo 去拉；
 - 模型：`mlx-community/Qwen2.5-7B-Instruct-4bit`，4.3 GB，放在
   `models/qwen2.5-7b-4bit/`；
 - 启动脚本默认：

@@ -352,7 +352,7 @@ if (!invoke) {
   invoke("llm_status")
     .then((info) => {
       llmConfigured = !!info.configured;
-      $("llm").textContent = info.configured ? `LLM ${info.model}` : "未配置 LLM key";
+      $("llm").textContent = info.configured ? `LLM ${String(info.model || "").split("/").pop()}` : "未配置 LLM key";
       $("llm").title = info.configured
         ? "每次定稿后自动发起一轮流式回复"
         : "设置 DEEPSEEK_API_KEY 后重启应用";
