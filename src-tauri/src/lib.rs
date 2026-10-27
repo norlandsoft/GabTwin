@@ -288,6 +288,9 @@ fn start_tts_worker(
             }
         ));
 
+        let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0";
+        let engine = engine.clone();
+        let mut tts_seq: u64 = 0;
         let mut started = false;
         let mut queued_ms: u64 = 0;
         let mut first_push_at: Option<Instant> = None;
@@ -347,6 +350,35 @@ fn start_tts_worker(
                         continue;
                     }
                     let ms = samples.len() as u64 * 1000 / tts_rate.max(1) as u64;
+                    if save_tts {
+                        tts_seq += 1;
+                        let dir = gabtwin_home()
+                            .join("recordings")
+                            .join(chrono::Local::now().format("%Y-%m-%d").to_string());
+                        let _ = std::fs::create_dir_all(&dir);
+                        let stamp = chrono::Local::now().format("%H%M%S").to_string();
+                        let path = dir.join(format!("{stamp}-{tts_seq:03}.wav"));
+                        match gabtwin_tts::save_wav(&path, &samples, tts_rate) {
+                            Ok(()) => {
+                                let record = serde_json::json!({
+                                    "ts": chrono::Local::now().to_rfc3339(),
+                                    "engine": engine,
+                                    "text": text,
+                                    "wav": path.display().to_string(),
+                                    "seconds": ms as f64 / 1000.0,
+                                });
+                                if let Ok(mut fh) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(dir.join("metadata.jsonl"))
+                                {
+                                    use std::io::Write;
+                                    let _ = writeln!(fh, "{record}");
+                                }
+                            }
+                            Err(err) => log(format!("保存 TTS 音频失败：{err:#}")),
+                        }
+                    }
                     let audio = resample_linear(&samples, tts_rate, speaker.sample_rate);
                     queued_ms += ms;
                     let first = !started;

@@ -239,6 +239,22 @@ fn merged_matcha_lexicon(dir: &Path) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// 把单声道 f32 写成 16-bit WAV。
+pub fn save_wav(path: &std::path::Path, samples: &[f32], sample_rate: u32) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)?;
+    for sample in samples {
+        writer.write_sample((sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+    }
+    writer.finalize()?;
+    Ok(())
+}
+
 /// 找 `<prefix>*.onnx`，有 int8 优先。
 fn pick_onnx(dir: &std::path::Path, prefix: &str) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
