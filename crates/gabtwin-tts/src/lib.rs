@@ -459,6 +459,14 @@ pub fn cleanup(samples: &mut [f32], sample_rate: u32) {
         y1 = y0;
         *sample = y0;
     }
+    // 峰值归一：太轻的提上来，接近 1.0 的压到 0.9，避免削波
+    let peak = samples.iter().fold(0.0f32, |acc, v| acc.max(v.abs()));
+    if peak > 0.0001 {
+        let gain = (0.9 / peak).min(2.5);
+        for sample in samples.iter_mut() {
+            *sample = (*sample * gain).clamp(-1.0, 1.0);
+        }
+    }
     // 15 ms 淡入/淡出
     let fade = ((sample_rate as f32 * 0.015) as usize).min(samples.len() / 2);
     for i in 0..fade {
