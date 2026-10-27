@@ -73,6 +73,29 @@ if ! cargo build -p gabtwin-app --quiet; then
   exit 1
 fi
 
+# 3. LLM：默认本地 mlx-lm server（GABTWIN_LLM=deepseek 走云端）
+if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
+  if [[ -d "$ROOT/models/qwen2.5-7b-4bit" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
+    if ! curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1; then
+      echo "启动本地 LLM（Qwen2.5-7B-MLX）…"
+      nohup "$ROOT/.venv-mlx/bin/python" -m mlx_lm server \
+        --model "$ROOT/models/qwen2.5-7b-4bit" \
+        --host 127.0.0.1 --port 8080 >> "$LOG_DIR/llm-server.log" 2>&1 &
+      echo $! > "$GABTWIN_HOME/llm-server.pid"
+      for _ in $(seq 1 180); do
+        curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1 && break
+        sleep 1
+      done
+    fi
+    export GABTWIN_LLM_BASE="http://127.0.0.1:8080/v1"
+    export GABTWIN_LLM_KEY="${GABTWIN_LLM_KEY:-local}"
+    export GABTWIN_LLM_MODEL="${GABTWIN_LLM_MODEL:-qwen2.5-7b-4bit}"
+    echo "LLM：本地 Qwen2.5-7B（127.0.0.1:8080）"
+  else
+    echo "提示：本地 LLM 模型缺失，回退 .env 的 LLM 配置"
+  fi
+fi
+
 # 3. TTS 引擎：默认 IndexTTS sidecar（GABTWIN_TTS=local 回退本地）
 if [[ "${GABTWIN_TTS:-local}" == "indextts" ]]; then
   if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$ROOT/models/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then

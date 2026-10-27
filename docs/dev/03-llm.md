@@ -108,3 +108,33 @@ UI 的"首 token"读数就是这一段；mock 下是 1 ms，不要拿它当真�
 - [ ] key 进 Keychain，设置页可填
 - [ ] 429/超时重试一次；失败时说一句固定话术
 - [ ] 上下文摘要（长对话）
+
+---
+
+## 本地小模型（Qwen2.5-7B，MLX）
+
+> 2026-10-27：聊天默认切到本地，不再依赖 DeepSeek。云端只保留为可选回退。
+
+- 运行时：`mlx-lm 0.32`，`mlx_lm server` 提供 OpenAI 兼容的
+  `/v1/chat/completions`（SSE 流式）；
+- 模型：`mlx-community/Qwen2.5-7B-Instruct-4bit`，4.3 GB，放在
+  `models/qwen2.5-7b-4bit/`；
+- 启动脚本默认：
+  ```bash
+  ./scripts/gabtwin-start.sh
+  # 自动启动 mlx_lm server (:8080)，并导出
+  # GABTWIN_LLM_BASE=http://127.0.0.1:8080/v1
+  # GABTWIN_LLM_KEY=local
+  # GABTWIN_LLM_MODEL=qwen2.5-7b-4bit
+  ```
+- 回云端：`GABTWIN_LLM=deepseek ./scripts/gabtwin-start.sh`（需要 `.env`
+  里的 `DEEPSEEK_API_KEY`，脚本不会起本地 server）。
+- 模型缺省时自动回退 `.env` 的 LLM 配置。
+
+### 注意
+
+- 本地 7B 的首 token 和吞吐取决于机器负载；对话只保留 12 条消息 / 4000 字，
+  上下文不会撑爆。
+- `mlx_lm.server` 是单机实验服务，不是生产级并发；当前一人用足够。
+- 首次启动要加载 4.3 GB 权重（约 5–10 秒），之后常驻。
+- 模型许可：Qwen2.5 为 Apache-2.0。

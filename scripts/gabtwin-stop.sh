@@ -38,6 +38,18 @@ pids_of_app() {
   }'
 }
 
+stop_llm_server() {
+  local pid_file="$GABTWIN_HOME/llm-server.pid"
+  [[ -f "$pid_file" ]] || return 0
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "停止本地 LLM（pid ${pid}）…"
+    kill "$pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+
 stop_sidecar() {
   local pid_file="$GABTWIN_HOME/tts-sidecar.pid"
   [[ -f "$pid_file" ]] || return 0
@@ -51,6 +63,7 @@ stop_sidecar() {
 }
 
 stop_sidecar
+stop_llm_server
 
 log_marker() {
   local dir

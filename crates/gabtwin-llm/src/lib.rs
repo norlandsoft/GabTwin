@@ -52,8 +52,8 @@ impl LlmConfig {
     ///   GABTWIN_LLM_BASE（默认 https://api.deepseek.com）
     ///   GABTWIN_LLM_MODEL（默认 deepseek-chat）
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("DEEPSEEK_API_KEY")
-            .or_else(|_| std::env::var("GABTWIN_LLM_KEY"))
+        let api_key = std::env::var("GABTWIN_LLM_KEY")
+            .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
             .ok()
             .filter(|k| !k.trim().is_empty())?;
         Some(Self {
