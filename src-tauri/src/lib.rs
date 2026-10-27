@@ -76,7 +76,12 @@ impl TtsState {
         Self {
             tx: Mutex::new(Some(tx)),
             generation,
-            splitter: Mutex::new(ClauseSplitter::new()),
+            splitter: Mutex::new(ClauseSplitter::with_first_cap(
+                std::env::var("GABTWIN_TTS_FIRST_CAP")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(20),
+            )),
             turn_started,
             mute,
             headphones,
@@ -212,7 +217,7 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "local".to_string());
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "indextts".to_string());
         let mut synth = match mode.as_str() {
             "glm" => {
                 let key = std::env::var("ZHIPU_API_KEY")

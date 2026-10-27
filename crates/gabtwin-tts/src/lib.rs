@@ -509,6 +509,8 @@ pub struct ClauseSplitter {
     /// 太短、不值得单独合成的小片段（比如强行切出来的"说。"），攒到下一句一起合成。
     pending: String,
     first: bool,
+    /// 首句最多合成的字数（越小出声越快）。
+    first_cap: usize,
 }
 
 impl Default for ClauseSplitter {
@@ -523,6 +525,14 @@ impl ClauseSplitter {
             buffer: String::new(),
             pending: String::new(),
             first: true,
+            first_cap: 20,
+        }
+    }
+
+    pub fn with_first_cap(cap: usize) -> Self {
+        Self {
+            first_cap: cap.max(6),
+            ..Self::new()
         }
     }
 
@@ -538,7 +548,7 @@ impl ClauseSplitter {
         self.buffer = clean(&self.buffer);
 
         let mut out = Vec::new();
-        while let Some(cut) = find_split(&self.buffer, self.first) {
+        while let Some(cut) = find_split(&self.buffer, self.first, self.first_cap) {
             let clause = self.buffer[..cut].trim().to_string();
             self.buffer = self.buffer[cut..].trim_start().to_string();
             if !is_speakable(&clause) {
@@ -598,9 +608,9 @@ fn clean(text: &str) -> String {
 ///
 /// 原则：**句子优先**。句末标点（引号外）最自然；等不及了退到范围内最后一个逗号；
 /// 再不行才硬切。引号里的内容会多等一会儿，等引号闭合再切。
-fn find_split(text: &str, first: bool) -> Option<usize> {
-    let hard_max = if first { 40 } else { 60 };
-    let comma_min = if first { 12 } else { 20 };
+fn find_split(text: &str, first: bool, first_cap: usize) -> Option<usize> {
+    let hard_max = if first { first_cap } else { 60 };
+    let comma_min = if first { (first_cap / 2).max(4) } else { 20 };
 
     let mut chars = 0usize;
     let mut depth = 0i32;
@@ -629,6 +639,16 @@ fn find_split(text: &str, first: bool) -> Option<usize> {
         }
         if chars >= hard_max {
             if depth == 0 {
+                // 引号刚好在硬上限处闭合：先看下一个字符是不是句末标点，
+                // 是的话别在这里硬切，让句号完成这一句。
+                let next_is_sentence_end = text[end..]
+                    .chars()
+                    .next()
+                    .map(|n| matches!(n, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n'))
+                    .unwrap_or(false);
+                if next_is_sentence_end {
+                    continue;
+                }
                 hard = Some(end);
                 break;
             }
@@ -692,7 +712,7 @@ mod tests {
 
     #[test]
     fn long_first_clause_falls_back_to_last_comma() {
-        let mut s = ClauseSplitter::new();
+        let mut s = ClauseSplitter::with_first_cap(40);
         let text = "一二三四五六七八九十，十一十二十三十四十五十六，十七十八十九二十二一二二二三二四二五二六二七二八二九三十三一三二";
         let out = s.push(text);
         assert_eq!(out.len(), 1);

@@ -101,7 +101,7 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
 fi
 
 # 3. TTS 引擎：默认 IndexTTS sidecar（GABTWIN_TTS=local 回退本地）
-if [[ "${GABTWIN_TTS:-local}" == "indextts" ]]; then
+if [[ "${GABTWIN_TTS:-indextts}" == "indextts" ]]; then
   if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1; then
       echo "启动 IndexTTS sidecar…"
