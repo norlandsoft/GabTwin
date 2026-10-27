@@ -100,6 +100,32 @@ impl LlmClient {
 
     /// 流式对话。每收到一个非空 delta 就调用 `on_delta`；
     /// `cancel` 置位后在下一个数据行处停下，已收到的文本仍会返回。
+    /// 启动时预热：用同一段 system prompt 发一个极小请求，
+    /// 让 server 完成权重换入与 system 前缀的 prompt cache。
+    pub fn prewarm(&self, system: &str) -> Result<()> {
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
+        let _: serde_json::Value = self
+            .http
+            .post(url)
+            .bearer_auth(&self.cfg.api_key)
+            .json(&serde_json::json!({
+                "model": self.cfg.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "你好"}
+                ],
+                "max_tokens": 1,
+                "stream": false
+            }))
+            .send()?
+            .error_for_status()?
+            .json()?;
+        Ok(())
+    }
+
     pub fn stream_chat<F>(
         &self,
         messages: &[Message],
@@ -238,6 +264,18 @@ impl Dialog {
     pub fn reset(&mut self) {
         self.history.clear();
     }
+}
+
+/// Qwen3.5/3.6 需要官方身份首行 + 关闭思考，才能稳定出正文。
+pub fn system_prompt_for(persona: &str, model: &str) -> String {
+    let mut prompt = String::new();
+    if model.contains("qwen3.6") || model.contains("qwen3_5") || model.contains("qwen3.5") {
+        prompt.push_str(
+            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant. <|think_off|>\n",
+        );
+    }
+    prompt.push_str(&spoken_system_prompt(persona));
+    prompt
 }
 
 /// 口语化系统提示：短句、不念 Markdown、一次两三句。

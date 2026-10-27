@@ -76,11 +76,12 @@ fi
 
 # 3. LLM：默认本地 mlx-lm server（GABTWIN_LLM=deepseek 走云端）
 if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
-  if [[ -d "$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
+  LLM_DIR="${GABTWIN_LLM_DIR:-$GABTWIN_MODELS_DIR/llm/qwen3.6-35b-a3b-abliterated-4bit}"
+  if [[ -d "$LLM_DIR" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1; then
       echo "启动本地 LLM（Qwen2.5-7B-MLX）…"
       nohup "$ROOT/.venv-mlx/bin/mlx_lm.server" \
-        --model "$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit" \
+        --model "$LLM_DIR" \
         --host 127.0.0.1 --port 8080 >> "$LOG_DIR/llm-server.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/llm-server.pid"
       for _ in $(seq 1 180); do
@@ -90,10 +91,10 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
     fi
     export GABTWIN_LLM_BASE="http://127.0.0.1:8080/v1"
     export GABTWIN_LLM_KEY="${GABTWIN_LLM_KEY:-local}"
-    export GABTWIN_LLM_MODEL="$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit"
+    export GABTWIN_LLM_MODEL="$LLM_DIR"
     curl -s --max-time 120 http://127.0.0.1:8080/v1/chat/completions \
       -H 'Content-Type: application/json' \
-      -d "{\"model\":\"$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":1}" >/dev/null 2>&1 || true
+      -d "{\"model\":\"$LLM_DIR\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":1}" >/dev/null 2>&1 || true
     echo "LLM：本地 Qwen2.5-7B（127.0.0.1:8080）"
   else
     echo "提示：本地 LLM 模型缺失，回退 .env 的 LLM 配置"

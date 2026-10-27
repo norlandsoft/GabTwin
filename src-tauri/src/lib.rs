@@ -1,6 +1,6 @@
 use chrono::Local;
 use gabtwin_audio::{resample_linear, start_speaker};
-use gabtwin_llm::{spoken_system_prompt, Dialog, LlmClient, LlmConfig};
+use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
     replay_wav, run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
@@ -452,9 +452,17 @@ impl LlmState {
             }
         };
         let persona = "你是 GabTwin，一个温和、好奇、话不多的中文闲聊伙伴。";
+        let model_hint = std::env::var("GABTWIN_LLM_MODEL").unwrap_or_default();
+        let system = system_prompt_for(persona, &model_hint);
+        if let Some(client) = client.clone() {
+            let system = system.clone();
+            std::thread::spawn(move || {
+                let _ = client.prewarm(&system);
+            });
+        }
         Self {
             client,
-            dialog: Mutex::new(Dialog::new(spoken_system_prompt(persona))),
+            dialog: Mutex::new(Dialog::new(system)),
             turn: AtomicU64::new(0),
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
         }
