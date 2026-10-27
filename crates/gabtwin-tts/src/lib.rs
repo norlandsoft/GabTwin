@@ -155,6 +155,7 @@ pub struct Tts {
     cfg: TtsConfig,
     reference: Option<Reference>,
     zipvoice: bool,
+    kind: &'static str,
 }
 
 fn load_reference(path: &Path, text: &str) -> Result<Reference> {
@@ -267,6 +268,7 @@ impl Tts {
         let tokens = dir.join("tokens.txt");
         let mut reference = None;
         let mut zipvoice = false;
+        let mut kind = "VITS";
         if !tokens.is_file() {
             bail!("TTS 模型文件缺失：{}（需要 tokens.txt）", tokens.display());
         }
@@ -308,6 +310,7 @@ impl Tts {
                 ..Default::default()
             };
             zipvoice = true;
+            kind = "ZipVoice 克隆";
             reference = match (&cfg.reference_wav, &cfg.reference_text) {
                 (Some(wav), Some(text)) if !text.trim().is_empty() => {
                     Some(load_reference(wav, text)?)
@@ -317,6 +320,7 @@ impl Tts {
                 ),
             };
         } else if let Some(acoustic) = pick_onnx(dir, "model-steps") {
+            kind = "Matcha";
             // Matcha（中英，16 kHz，配 vocos 声码器；非自回归，快）
             let vocoder = pick_onnx(dir, "vocos")
                 .or_else(|| pick_onnx(dir, "vocoder"))
@@ -332,6 +336,7 @@ impl Tts {
             config.model.matcha.lexicon = Some(lexicon.display().to_string());
             config.model.matcha.tokens = Some(tokens.display().to_string());
         } else if dir.join("voices.bin").is_file() {
+            kind = "Kokoro";
             // Kokoro（24 kHz 多语，中文音色从 sid 3 开始）
             let model = pick_onnx(dir, "model")
                 .ok_or_else(|| anyhow::anyhow!("Kokoro 需要 model*.onnx（{}）", dir.display()))?;
@@ -392,7 +397,12 @@ impl Tts {
             cfg: cfg.clone(),
             reference,
             zipvoice,
+            kind,
         })
+    }
+
+    pub fn engine_name(&self) -> &'static str {
+        self.kind
     }
 
     pub fn sample_rate(&self) -> u32 {

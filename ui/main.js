@@ -299,6 +299,25 @@ if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
   listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  listen("tts-engine", (e) => {
+    const payload = e.payload || {};
+    const el = $("ttsEngine");
+    if (el) {
+      el.textContent = `TTS ${payload.engine || "—"}`;
+      el.title = payload.detail || "";
+    }
+  });
+  if (invoke) {
+    invoke("tts_info")
+      .then((info) => {
+        const el = $("ttsEngine");
+        if (el && info) {
+          el.textContent = `TTS ${info.engine || "—"}`;
+          el.title = info.detail || "";
+        }
+      })
+      .catch(() => {});
+  }
   listen("llm-thinking", (e) => onLlmThinking(e.payload || {}));
   listen("llm-delta", (e) => onLlmDelta(e.payload || {}));
   listen("llm-done", (e) => onLlmDone(e.payload || {}));

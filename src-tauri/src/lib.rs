@@ -52,6 +52,8 @@ struct TtsState {
     headphones: Arc<AtomicBool>,
     /// 当前是否正在播放，用于耳机下的插话检测。
     speaking: Arc<AtomicBool>,
+    /// 当前 TTS 引擎（窗口里显示）。
+    label: Arc<Mutex<(String, String)>>,
 }
 
 impl TtsState {
@@ -61,6 +63,7 @@ impl TtsState {
         let mute = Arc::new(AtomicBool::new(false));
         let headphones = Arc::new(AtomicBool::new(false));
         let speaking = Arc::new(AtomicBool::new(false));
+        let label = Arc::new(Mutex::new(("—".to_string(), String::new())));
         let tx = start_tts_worker(
             app,
             generation.clone(),
@@ -68,6 +71,7 @@ impl TtsState {
             mute.clone(),
             headphones.clone(),
             speaking.clone(),
+            label.clone(),
         );
         Self {
             tx: Mutex::new(Some(tx)),
@@ -77,6 +81,7 @@ impl TtsState {
             mute,
             headphones,
             speaking,
+            label,
         }
     }
 
@@ -151,6 +156,17 @@ impl Synth {
             Self::Glm(glm) => glm.synthesize(text),
         }
     }
+
+    fn label(&self) -> (String, String) {
+        match self {
+            Self::Local(tts) => (
+                tts.engine_name().to_string(),
+                tts_model_dir().display().to_string(),
+            ),
+            Self::Remote(_) => ("IndexTTS（本地）".to_string(), "127.0.0.1:8798".to_string()),
+            Self::Glm(_) => ("GLM 云端克隆".to_string(), "bigmodel.cn".to_string()),
+        }
+    }
 }
 
 fn build_local_synth(app: &AppHandle) -> Option<Synth> {
@@ -191,10 +207,11 @@ fn start_tts_worker(
     mute: Arc<AtomicBool>,
     headphones: Arc<AtomicBool>,
     speaking: Arc<AtomicBool>,
+    label: Arc<Mutex<(String, String)>>,
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "indextts".to_string());
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "local".to_string());
         let mut synth = match mode.as_str() {
             "glm" => {
                 let key = std::env::var("ZHIPU_API_KEY")
@@ -234,6 +251,13 @@ fn start_tts_worker(
         let Some(synth) = synth else {
             return;
         };
+        let (engine, detail) = synth.label();
+        *label.lock().unwrap() = (engine.clone(), detail.clone());
+        let _ = app.emit(
+            "tts-engine",
+            serde_json::json!({ "engine": engine, "detail": detail }),
+        );
+        log(format!("TTS 引擎：{engine}（{detail}）"));
         let warm = Instant::now();
         let _ = synth.synthesize("你好");
         log(format!(
@@ -669,6 +693,12 @@ fn replay_sample(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn tts_info(state: tauri::State<TtsState>) -> serde_json::Value {
+    let (engine, detail) = state.label.lock().unwrap().clone();
+    serde_json::json!({ "engine": engine, "detail": detail })
+}
+
+#[tauri::command]
 fn app_info() -> serde_json::Value {
     serde_json::json!({
         "home": gabtwin_home().display().to_string(),
@@ -701,6 +731,7 @@ pub fn run() {
             stop_listening,
             replay_sample,
             app_info,
+            tts_info,
             llm_status
         ])
         .setup(|app| {
