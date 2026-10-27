@@ -169,7 +169,21 @@ impl Synth {
                 tts.engine_name().to_string(),
                 tts_model_dir().display().to_string(),
             ),
-            Self::Remote(_) => ("IndexTTS（本地）".to_string(), "127.0.0.1:8798".to_string()),
+            Self::Remote(_) => {
+                let is_breeze = std::env::var("GABTWIN_TTS")
+                    .map(|value| value == "breeze")
+                    .unwrap_or(true);
+                (
+                    if is_breeze {
+                        "Breeze（本地）"
+                    } else {
+                        "IndexTTS（本地）"
+                    }
+                    .to_string(),
+                    std::env::var("GABTWIN_TTS_URL")
+                        .unwrap_or_else(|_| "127.0.0.1:8799".to_string()),
+                )
+            }
             Self::Glm(_) => ("GLM 云端克隆".to_string(), "bigmodel.cn".to_string()),
         }
     }
@@ -217,7 +231,7 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "indextts".to_string());
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "breeze".to_string());
         let mut synth = match mode.as_str() {
             "glm" => {
                 let key = std::env::var("ZHIPU_API_KEY")
@@ -246,7 +260,7 @@ fn start_tts_worker(
                     }
                 }
             }
-            "indextts" => std::env::var("GABTWIN_TTS_URL")
+            "indextts" | "breeze" => std::env::var("GABTWIN_TTS_URL")
                 .ok()
                 .and_then(|url| RemoteTts::new(url).ok().map(Synth::Remote)),
             _ => None,

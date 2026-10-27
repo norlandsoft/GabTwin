@@ -156,3 +156,14 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 - [ ] viseme 时间轴（文本拼音 → 口型）
 - [ ] AEC + 真打断（M2）
 - [ ] 播放设备选择
+
+
+## Breeze TTS 2（默认，2026-10-28）
+
+- sidecar：`scripts/breeze_tts_sidecar.py`，加载 `models/tts/breeze-tts2-4bit` 一次，
+  HTTP `:8799` 返回 24 kHz WAV；
+- 参考音：`$GABTWIN_HOME/tts/index-ref.wav`（GLM 干净音色）+ 逐字文字；
+- 启动脚本默认 `GABTWIN_TTS=breeze` 并自动拉起 sidecar；
+- 回 IndexTTS：`GABTWIN_TTS=indextts`；回本地 Matcha/ZipVoice：`GABTWIN_TTS=local`；
+- 实测首音约 4.2 s（IndexTTS 约 8 s），后续每句仍受 Breeze RTF 限制；
+- **许可证：Breezeblue 研究/非商用**，商用需单独授权。

@@ -18,6 +18,7 @@ cd "$ROOT"
 
 GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
 export GABTWIN_MODELS_DIR="$ROOT/models"
+export GABTWIN_TTS="${GABTWIN_TTS:-breeze}"
 MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_MODELS_DIR/asr/streaming-paraformer-bilingual-zh-en}"
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
@@ -102,8 +103,8 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
   fi
 fi
 
-# 3. TTS 引擎：默认 IndexTTS sidecar（GABTWIN_TTS=local 回退本地）
-if [[ "${GABTWIN_TTS:-indextts}" == "indextts" ]]; then
+# 3. TTS 引擎：默认 Breeze sidecar；GABTWIN_TTS=indextts 切 IndexTTS；local 回退本地
+if [[ "${GABTWIN_TTS:-breeze}" == "indextts" ]]; then
   if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1; then
       echo "启动 IndexTTS sidecar…"
@@ -122,24 +123,28 @@ if [[ "${GABTWIN_TTS:-indextts}" == "indextts" ]]; then
   else
     echo "提示：IndexTTS 运行时/模型/参考音缺失，回退本地 TTS"
   fi
-fi
-
-# 1. 已经在跑就不再起第二个（包括手动启动、没有 PID 记录的实例）
-if [[ -f "$PID_FILE" ]]; then
-  pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if is_our_pid "${pid:-}"; then
-    echo "GabTwin 已在运行（pid ${pid}）。"
-    echo "日志：$LOG"
-    echo "停止：./scripts/gabtwin-stop.sh"
-    exit 0
+elif [[ "${GABTWIN_TTS:-breeze}" == "breeze" ]]; then
+  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/breeze-tts2-4bit" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
+    if ! curl -fsS --max-time 2 http://127.0.0.1:8799/health >/dev/null 2>&1; then
+      echo "启动 Breeze TTS sidecar…"
+      nohup "$ROOT/.venv-mlx/bin/python" "$ROOT/scripts/breeze_tts_sidecar.py" \
+        --model "$GABTWIN_MODELS_DIR/tts/breeze-tts2-4bit" \
+        --ref "$GABTWIN_HOME/tts/index-ref.wav" \
+        --ref-text "今天早上我起得有点晚，差一点就错过地铁了。" \
+        --port 8799 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
+      echo $! > "$GABTWIN_HOME/tts-sidecar.pid"
+      for _ in $(seq 1 180); do
+        curl -fsS --max-time 2 http://127.0.0.1:8799/health >/dev/null 2>&1 && break
+        sleep 1
+      done
+    fi
+    export GABTWIN_TTS_URL="http://127.0.0.1:8799"
+    echo "TTS：Breeze（127.0.0.1:8799）"
+  else
+    echo "提示：Breeze 模型/参考音缺失，回退本地 TTS"
   fi
-  rm -f "$PID_FILE"
-fi
-existing="$(pids_of_app | head -1)"
-if [[ -n "$existing" ]]; then
-  echo "GabTwin 已在运行（pid ${existing}，不是本脚本启动的）。"
-  echo "停止：./scripts/gabtwin-stop.sh"
-  exit 0
+else
+  echo "TTS：本地引擎（GABTWIN_TTS=${GABTWIN_TTS:-breeze}）"
 fi
 
 # 4. 后台启动
