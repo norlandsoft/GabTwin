@@ -79,7 +79,7 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
   LLM_DIR="${GABTWIN_LLM_DIR:-$GABTWIN_MODELS_DIR/llm/qwen3.5-9b-abliterated-4bit}"
   if [[ -d "$LLM_DIR" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1; then
-      echo "启动本地 LLM（Qwen2.5-7B-MLX）…"
+      echo "启动本地 LLM（$(basename "$LLM_DIR")）…"
       nohup "$ROOT/.venv-mlx/bin/mlx_lm.server" \
         --model "$LLM_DIR" \
         --host 127.0.0.1 --port 8080 \
@@ -96,7 +96,7 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
     curl -s --max-time 120 http://127.0.0.1:8080/v1/chat/completions \
       -H 'Content-Type: application/json' \
       -d "{\"model\":\"$LLM_DIR\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"max_tokens\":1}" >/dev/null 2>&1 || true
-    echo "LLM：本地 Qwen2.5-7B（127.0.0.1:8080）"
+    echo "LLM：本地 $(basename "$LLM_DIR")（127.0.0.1:8080）"
   else
     echo "提示：本地 LLM 模型缺失，回退 .env 的 LLM 配置"
   fi
