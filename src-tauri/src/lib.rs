@@ -283,14 +283,19 @@ fn start_tts_worker(
             }
         };
         headphones.store(speaker.headphones, Ordering::SeqCst);
+        let barge_in = std::env::var("GABTWIN_BARGE_IN")
+            .map(|value| value == "1")
+            .unwrap_or(false);
         log(format!(
             "音频输出：{} Hz（TTS {} Hz，线性重采样），{}",
             speaker.sample_rate,
             synth.sample_rate(),
-            if speaker.headphones {
-                "耳机：可直接插话"
+            if speaker.headphones && barge_in {
+                "耳机：可直接插话（GABTWIN_BARGE_IN=1）"
+            } else if speaker.headphones {
+                "耳机：播放时闭麦（默认，GABTWIN_BARGE_IN=1 可插话）"
             } else {
-                "外放：播放时半双工"
+                "外放：播放时闭麦（半双工）"
             }
         ));
 
@@ -324,7 +329,7 @@ fn start_tts_worker(
                     let flag = mute.clone();
                     let playing = speaking.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(remaining + 250));
+                        std::thread::sleep(Duration::from_millis(remaining + 450));
                         flag.store(false, Ordering::SeqCst);
                         playing.store(false, Ordering::SeqCst);
                         log("TTS 结束：恢复麦克风");
@@ -525,10 +530,23 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
 
     let mut cfg = SessionConfig::new(model_dir());
     if let Some(tts) = app.try_state::<TtsState>() {
-        // 耳机：不闭麦，靠插话检测；外放：播放期间半双工。
-        if !tts.headphones.load(Ordering::SeqCst) {
+        // 默认播放时一律闭麦，避免 TTS 被麦克风收进去形成回声循环。
+        // 只有显式 GABTWIN_BARGE_IN=1 且耳机时才保留麦克风做插话。
+        let barge_in = std::env::var("GABTWIN_BARGE_IN")
+            .map(|value| value == "1")
+            .unwrap_or(false);
+        let allow_barge = barge_in && tts.headphones.load(Ordering::SeqCst);
+        if !allow_barge {
             cfg.mute = Some(tts.mute.clone());
         }
+        log(format!(
+            "麦克风策略：{}",
+            if allow_barge {
+                "耳机 + 插话（GABTWIN_BARGE_IN=1）"
+            } else {
+                "TTS 播放时闭麦（默认）"
+            }
+        ));
     }
     if let Ok(device) = std::env::var("GABTWIN_DEVICE") {
         if !device.is_empty() {
@@ -571,7 +589,12 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             }
             if let SessionEvent::Partial { .. } = &event {
                 if let Some(tts) = llm_app.try_state::<TtsState>() {
-                    if tts.speaking.load(Ordering::SeqCst) && tts.headphones.load(Ordering::SeqCst)
+                    let barge_in = std::env::var("GABTWIN_BARGE_IN")
+                        .map(|value| value == "1")
+                        .unwrap_or(false);
+                    if barge_in
+                        && tts.speaking.load(Ordering::SeqCst)
+                        && tts.headphones.load(Ordering::SeqCst)
                     {
                         tts.stop();
                         if let Some(llm) = llm_app.try_state::<LlmState>() {

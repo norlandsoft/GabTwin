@@ -166,3 +166,13 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 - [ ] hotwords / 用户词表：把"过滤""GitHub""JSON"这类常错词加进去
 - [ ] 把 trace 落成 JSONL（现在 probe 已有 `--jsonl`，应用侧还没接）
 - [ ] 应用侧去掉逐条 `eprintln!`，改成可选 `GABTWIN_DEBUG`
+
+
+## 半双工与回声
+
+默认 **TTS 播放时闭麦**：`run_mic` 丢弃麦克风音频并 reset 流式识别器，TTS 结束后再等 450 ms 才恢复；
+这样外放/耳机都不会把 TTS 收进 ASR 形成死循环。
+
+- 耳机插话是显式开关：`GABTWIN_BARGE_IN=1`，且只在耳机设备下生效；
+- 外放无论是否开插话都闭麦；
+- 如果设备被误判成耳机，默认闭麦仍然生效，不会再回环。
