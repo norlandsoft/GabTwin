@@ -299,6 +299,11 @@ if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
   listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && invoke) {
+      invoke("interrupt").catch(() => {});
+    }
+  });
   listen("tts-engine", (e) => {
     const payload = e.payload || {};
     const el = $("ttsEngine");

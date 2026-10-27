@@ -54,6 +54,8 @@ struct TtsState {
     speaking: Arc<AtomicBool>,
     /// 当前 TTS 引擎（窗口里显示）。
     label: Arc<Mutex<(String, String)>>,
+    /// 最近一轮 TTS 的全文 + 结束时刻，用于过滤残余回声。
+    last_reply: Arc<Mutex<(String, Option<Instant>)>>,
 }
 
 impl TtsState {
@@ -64,6 +66,7 @@ impl TtsState {
         let headphones = Arc::new(AtomicBool::new(false));
         let speaking = Arc::new(AtomicBool::new(false));
         let label = Arc::new(Mutex::new(("—".to_string(), String::new())));
+        let last_reply = Arc::new(Mutex::new((String::new(), None)));
         let tx = start_tts_worker(
             app,
             generation.clone(),
@@ -72,6 +75,7 @@ impl TtsState {
             headphones.clone(),
             speaking.clone(),
             label.clone(),
+            last_reply.clone(),
         );
         Self {
             tx: Mutex::new(Some(tx)),
@@ -87,6 +91,7 @@ impl TtsState {
             headphones,
             speaking,
             label,
+            last_reply,
         }
     }
 
@@ -228,6 +233,7 @@ fn start_tts_worker(
     headphones: Arc<AtomicBool>,
     speaking: Arc<AtomicBool>,
     label: Arc<Mutex<(String, String)>>,
+    last_reply: Arc<Mutex<(String, Option<Instant>)>>,
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -316,12 +322,15 @@ fn start_tts_worker(
         let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0";
         let engine = engine.clone();
         let mut tts_seq: u64 = 0;
+        let mut reply_text = String::new();
         let mut started = false;
         let mut queued_ms: u64 = 0;
         let mut first_push_at: Option<Instant> = None;
         while let Ok(command) = rx.recv() {
             match command {
                 TtsCommand::Stop => {
+                    *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
+                    reply_text.clear();
                     speaker.clear();
                     started = false;
                     queued_ms = 0;
@@ -330,6 +339,8 @@ fn start_tts_worker(
                     speaking.store(false, Ordering::SeqCst);
                 }
                 TtsCommand::Flush => {
+                    *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
+                    reply_text.clear();
                     // 合成期间已经在播的部分要扣掉，否则声音结束后还会多静音一段。
                     let played = first_push_at
                         .map(|at| at.elapsed().as_millis() as u64)
@@ -343,7 +354,7 @@ fn start_tts_worker(
                     let flag = mute.clone();
                     let playing = speaking.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(remaining + 450));
+                        std::thread::sleep(Duration::from_millis(remaining + 800));
                         flag.store(false, Ordering::SeqCst);
                         playing.store(false, Ordering::SeqCst);
                         log("TTS 结束：恢复麦克风");
@@ -405,6 +416,10 @@ fn start_tts_worker(
                         }
                     }
                     let audio = resample_linear(&samples, tts_rate, speaker.sample_rate);
+                    if !started {
+                        reply_text.clear();
+                    }
+                    reply_text.push_str(&text);
                     queued_ms += ms;
                     let first = !started;
                     started = true;
@@ -440,6 +455,37 @@ fn start_tts_worker(
         }
     });
     tx
+}
+
+/// 判断识别结果是否只是刚播完的 TTS 残余回声（字符 bigram Jaccard）。
+fn is_tts_echo(text: &str, state: &TtsState) -> bool {
+    let (last, at) = state.last_reply.lock().unwrap().clone();
+    let Some(at) = at else { return false };
+    if at.elapsed() > Duration::from_secs(5) {
+        return false;
+    }
+    let norm = |value: &str| -> String {
+        value
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    };
+    let said = norm(text);
+    let last = norm(&last);
+    if said.chars().count() < 4 || last.chars().count() < 4 {
+        return false;
+    }
+    let grams = |value: &String| -> std::collections::HashSet<(char, char)> {
+        value.chars().collect::<Vec<_>>().windows(2).map(|w| (w[0], w[1])).collect()
+    };
+    let a = grams(&said);
+    let b = grams(&last);
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let inter = a.intersection(&b).count() as f32;
+    let union = a.union(&b).count() as f32;
+    inter / union > 0.45
 }
 
 struct LlmState {
@@ -620,9 +666,16 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
             }
             if let SessionEvent::Segment { text, .. } = &event {
                 // 只有标点/空白的结果不要触发一轮对话。
-                if text.chars().any(|c| c.is_alphanumeric()) {
-                    start_llm_turn(&llm_app, text.clone());
+                if !text.chars().any(|c| c.is_alphanumeric()) {
+                    return;
                 }
+                if let Some(tts) = llm_app.try_state::<TtsState>() {
+                    if is_tts_echo(text, &tts) {
+                        log("忽略疑似 TTS 回声，不进入 LLM");
+                        return;
+                    }
+                }
+                start_llm_turn(&llm_app, text.clone());
             }
         };
 
@@ -776,6 +829,17 @@ fn replay_sample(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn interrupt(app: AppHandle) {
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.stop();
+    }
+    if let Some(llm) = app.try_state::<LlmState>() {
+        llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+    }
+    log("手动打断：停止 TTS 并取消回复");
+}
+
+#[tauri::command]
 fn tts_info(state: tauri::State<TtsState>) -> serde_json::Value {
     let (engine, detail) = state.label.lock().unwrap().clone();
     serde_json::json!({ "engine": engine, "detail": detail })
@@ -815,6 +879,7 @@ pub fn run() {
             replay_sample,
             app_info,
             tts_info,
+            interrupt,
             llm_status
         ])
         .setup(|app| {
