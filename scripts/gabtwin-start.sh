@@ -76,13 +76,14 @@ fi
 
 # 3. LLM：默认本地 mlx-lm server（GABTWIN_LLM=deepseek 走云端）
 if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
-  LLM_DIR="${GABTWIN_LLM_DIR:-$GABTWIN_MODELS_DIR/llm/qwen2.5-7b-4bit}"
+  LLM_DIR="${GABTWIN_LLM_DIR:-$GABTWIN_MODELS_DIR/llm/qwen3.5-9b-abliterated-4bit}"
   if [[ -d "$LLM_DIR" && -x "$ROOT/.venv-mlx/bin/python" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1; then
       echo "启动本地 LLM（Qwen2.5-7B-MLX）…"
       nohup "$ROOT/.venv-mlx/bin/mlx_lm.server" \
         --model "$LLM_DIR" \
-        --host 127.0.0.1 --port 8080 >> "$LOG_DIR/llm-server.log" 2>&1 &
+        --host 127.0.0.1 --port 8080 \
+        --chat-template-args '{"enable_thinking": false}'  >> "$LOG_DIR/llm-server.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/llm-server.pid"
       for _ in $(seq 1 180); do
         curl -fsS --max-time 2 http://127.0.0.1:8080/v1/models >/dev/null 2>&1 && break

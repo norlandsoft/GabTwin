@@ -139,3 +139,27 @@ UI 的"首 token"读数就是这一段；mock 下是 1 ms，不要拿它当真�
 - `mlx_lm.server` 是单机实验服务，不是生产级并发；当前一人用足够。
 - 首次启动要加载 4.3 GB 权重（约 5–10 秒），之后常驻。
 - 模型许可：Qwen2.5 为 Apache-2.0。
+
+---
+
+## 默认切到 Qwen3.5-9B abliterated（2026-10-28）
+
+- 权重：`lukey03/Qwen3.5-9B-abliterated-MLX-4bit`，5.04 GB，sha256 已校验；
+- 目录：`models/llm/qwen3.5-9b-abliterated-4bit/`；
+- `mlx-lm 0.32.2` 只认 `qwen3_5`，不认仓库里的 `qwen3_5_text`，因此把
+  `config.json` 的 `model_type` 改为 `qwen3_5`（原文件备份为 `config.json.orig`）；
+- 该模型默认开启思考，会把 40 token 预算吃光；启动 server 时加
+  `--chat-template-args '{"enable_thinking": false}'`，并在 system prompt 首行
+  保留 Qwen 官方身份句；
+- 实测首 token 0.65 s（32 GB M1 Max，5.1 GB 权重），不再有 35B 的换页问题。
+
+### GABTWIN_LLM_MODEL
+
+用**本地绝对路径**，不是 HF 仓库名：
+
+```bash
+GABTWIN_LLM_MODEL=/opt/GabTwin/models/llm/qwen3.5-9b-abliterated-4bit
+```
+
+启动脚本会把它设为默认并传给 `mlx_lm.server`；手动起 server 时，请求里的
+`model` 字段也必须是这个绝对路径。
