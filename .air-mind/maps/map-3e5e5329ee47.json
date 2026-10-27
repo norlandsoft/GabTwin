@@ -1,0 +1,163 @@
+{
+  "schema": 1,
+  "id": "map-3e5e5329ee47",
+  "title": "欢迎使用 AirMind",
+  "themeId": "dsh",
+  "direction": 2,
+  "revision": 1,
+  "createdAt": "2026-10-27T01:27:56.218Z",
+  "updatedAt": "2026-10-27T01:27:56.218Z",
+  "data": {
+    "nodeData": {
+      "id": "root-0a92167c5973",
+      "topic": "欢迎使用 AirMind",
+      "root": true,
+      "note": "这是一张可编辑的示例导图。双击主题改名，Tab 添加子主题，Enter 添加同级主题。",
+      "children": [
+        {
+          "id": "n-905fd712c236",
+          "topic": "快速开始",
+          "icons": [
+            "🚀"
+          ],
+          "children": [
+            {
+              "id": "n-6fc7baf019c7",
+              "topic": "双击主题，直接编辑文字"
+            },
+            {
+              "id": "n-e4cfa85c5b80",
+              "topic": "Tab 添加子主题，Enter 添加同级主题"
+            },
+            {
+              "id": "n-fa564c2ce78a",
+              "topic": "拖拽主题可以调整层级和顺序"
+            },
+            {
+              "id": "n-48197fb75597",
+              "topic": "右键画布或主题，打开更多操作"
+            }
+          ]
+        },
+        {
+          "id": "n-b7ad59697f52",
+          "topic": "主题元素",
+          "icons": [
+            "🎨"
+          ],
+          "children": [
+            {
+              "id": "n-509c28616b28",
+              "topic": "图标：右侧「格式」面板选择标记"
+            },
+            {
+              "id": "n-bf9061318516",
+              "topic": "标签：给主题加上分类标签"
+            },
+            {
+              "id": "n-0bfd2fd041c5",
+              "topic": "超链接：附加网页或文档地址"
+            },
+            {
+              "id": "n-08fdb4bcb5d8",
+              "topic": "备注：记录更长的说明"
+            }
+          ]
+        },
+        {
+          "id": "n-ad2d0239147f",
+          "topic": "导图结构",
+          "icons": [
+            "🧭"
+          ],
+          "children": [
+            {
+              "id": "n-47ea1cb59e7b",
+              "topic": "双向导图：向左右两侧展开"
+            },
+            {
+              "id": "n-fc8937fa39ff",
+              "topic": "向右 / 向左逻辑图"
+            },
+            {
+              "id": "n-0bfa43990506",
+              "topic": "向下组织图"
+            }
+          ]
+        },
+        {
+          "id": "n-4b2e18084ecd",
+          "topic": "关系与概要",
+          "icons": [
+            "🔗"
+          ],
+          "children": [
+            {
+              "id": "n-cd3b2966d4ea",
+              "topic": "关系线：连接任意两个主题"
+            },
+            {
+              "id": "n-eeaf9798bfaa",
+              "topic": "概要：为一组子主题添加总结"
+            },
+            {
+              "id": "n-ba3293f89010",
+              "topic": "工具栏可直接插入关系线和概要"
+            }
+          ]
+        },
+        {
+          "id": "n-e92d3a05cf21",
+          "topic": "AI 协作",
+          "icons": [
+            "✨"
+          ],
+          "tags": [
+            "AI"
+          ],
+          "children": [
+            {
+              "id": "n-3ad8fc2b71d2",
+              "topic": "用一句话生成一张完整导图"
+            },
+            {
+              "id": "n-208e09fed839",
+              "topic": "选中主题，让 AI 扩展下一层想法"
+            },
+            {
+              "id": "n-7269e7fe355d",
+              "topic": "让 AI 总结分支，或评审整张导图"
+            }
+          ]
+        },
+        {
+          "id": "n-62f0273dffd1",
+          "topic": "本地存储",
+          "icons": [
+            "💾"
+          ],
+          "children": [
+            {
+              "id": "n-89aadd3532ce",
+              "topic": "自动保存在工作区的 .air-mind 目录"
+            },
+            {
+              "id": "n-f8b725f4ea23",
+              "topic": "支持导出 JSON、Markdown、SVG、PNG"
+            },
+            {
+              "id": "n-58e6a23d8303",
+              "topic": "Agent 也可以通过 air_mind 工具读写"
+            }
+          ]
+        }
+      ]
+    },
+    "arrows": [],
+    "summaries": [],
+    "direction": 2,
+    "meta": {
+      "createdBy": "air-mind"
+    }
+  }
+}

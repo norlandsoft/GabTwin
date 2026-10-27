@@ -5,7 +5,7 @@ use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, replay_wav,
     run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
-use gabtwin_tts::{ClauseSplitter, RemoteTts, Tts, TtsConfig};
+use gabtwin_tts::{ClauseSplitter, GlmTts, RemoteTts, Tts, TtsConfig};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -132,6 +132,7 @@ fn tts_model_dir() -> PathBuf {
 enum Synth {
     Local(Tts),
     Remote(RemoteTts),
+    Glm(GlmTts),
 }
 
 impl Synth {
@@ -139,6 +140,7 @@ impl Synth {
         match self {
             Self::Local(tts) => tts.sample_rate(),
             Self::Remote(remote) => remote.sample_rate(),
+            Self::Glm(glm) => glm.sample_rate(),
         }
     }
 
@@ -146,6 +148,38 @@ impl Synth {
         match self {
             Self::Local(tts) => Ok((tts.synthesize(text)?, tts.sample_rate())),
             Self::Remote(remote) => remote.synthesize(text),
+            Self::Glm(glm) => glm.synthesize(text),
+        }
+    }
+}
+
+fn build_local_synth(app: &AppHandle) -> Option<Synth> {
+    let dir = tts_model_dir();
+    let mut tts_config = TtsConfig::new(dir.clone());
+    tts_config.reference_wav = std::env::var_os("GABTWIN_TTS_REF_WAV")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let path = gabtwin_home().join("tts/reference.wav");
+            path.is_file().then_some(path)
+        });
+    tts_config.reference_text = std::env::var("GABTWIN_TTS_REF_TEXT").ok().or_else(|| {
+        std::fs::read_to_string(gabtwin_home().join("tts/reference.txt"))
+            .ok()
+            .map(|text| text.trim().to_string())
+    });
+    tts_config.num_steps = std::env::var("GABTWIN_TTS_STEPS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    match Tts::new(&tts_config) {
+        Ok(tts) => Some(Synth::Local(tts)),
+        Err(err) => {
+            log(format!("本地 TTS 不可用：{err:#}"));
+            let _ = app.emit(
+                "tts-error",
+                serde_json::json!({ "message": format!("本地 TTS 不可用：{err:#}") }),
+            );
+            None
         }
     }
 }
@@ -160,50 +194,45 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let synth = if let Ok(url) = std::env::var("GABTWIN_TTS_URL") {
-            match RemoteTts::new(url.clone()) {
-                Ok(remote) => {
-                    log(format!("TTS：远程服务 {url}"));
-                    Synth::Remote(remote)
-                }
-                Err(err) => {
-                    log(format!("远程 TTS 不可用：{err:#}"));
-                    let _ = app.emit(
-                        "tts-error",
-                        serde_json::json!({ "message": format!("远程 TTS 不可用：{err:#}") }),
-                    );
-                    return;
-                }
-            }
-        } else {
-            let dir = tts_model_dir();
-            let mut tts_config = TtsConfig::new(dir.clone());
-            tts_config.reference_wav = std::env::var_os("GABTWIN_TTS_REF_WAV")
-                .map(PathBuf::from)
-                .or_else(|| {
-                    let path = gabtwin_home().join("tts/reference.wav");
-                    path.is_file().then_some(path)
-                });
-            tts_config.reference_text = std::env::var("GABTWIN_TTS_REF_TEXT").ok().or_else(|| {
-                std::fs::read_to_string(gabtwin_home().join("tts/reference.txt"))
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "glm".to_string());
+        let mut synth = match mode.as_str() {
+            "glm" => {
+                let key = std::env::var("ZHIPU_API_KEY")
                     .ok()
-                    .map(|text| text.trim().to_string())
-            });
-            tts_config.num_steps = std::env::var("GABTWIN_TTS_STEPS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(0);
-            match Tts::new(&tts_config) {
-                Ok(tts) => Synth::Local(tts),
-                Err(err) => {
-                    log(format!("TTS 不可用：{err:#}"));
-                    let _ = app.emit(
-                        "tts-error",
-                        serde_json::json!({ "message": format!("TTS 不可用：{err:#}") }),
-                    );
-                    return;
+                    .filter(|v| !v.is_empty());
+                let voice = std::env::var("GABTWIN_GLM_VOICE").ok().or_else(|| {
+                    let path = gabtwin_home().join("voices/glm/gabtwin.json");
+                    let text = std::fs::read_to_string(path).ok()?;
+                    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+                    value.get("voice")?.as_str().map(str::to_string)
+                });
+                match (key, voice) {
+                    (Some(key), Some(voice)) => match GlmTts::new(key, voice) {
+                        Ok(glm) => {
+                            log("TTS：GLM 云端克隆音色");
+                            Some(Synth::Glm(glm))
+                        }
+                        Err(err) => {
+                            log(format!("GLM TTS 初始化失败：{err:#}"));
+                            None
+                        }
+                    },
+                    _ => {
+                        log("TTS：缺少 ZHIPU_API_KEY 或音色 id，回退本地");
+                        None
+                    }
                 }
             }
+            "indextts" => std::env::var("GABTWIN_TTS_URL")
+                .ok()
+                .and_then(|url| RemoteTts::new(url).ok().map(Synth::Remote)),
+            _ => None,
+        };
+        if synth.is_none() {
+            synth = build_local_synth(&app);
+        }
+        let Some(synth) = synth else {
+            return;
         };
         let warm = Instant::now();
         let _ = synth.synthesize("你好");

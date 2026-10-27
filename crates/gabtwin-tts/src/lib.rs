@@ -40,11 +40,32 @@ impl TtsConfig {
     }
 }
 
+/// 把 WAV 字节解码成单声道 f32。
+fn decode_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
+    let mut reader = hound::WavReader::new(std::io::Cursor::new(bytes))?;
+    let spec = reader.spec();
+    let channels = spec.channels.max(1) as usize;
+    let raw: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => reader
+            .samples::<i16>()
+            .map(|s| s.map(|v| v as f32 / 32768.0))
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+    };
+    let mut samples: Vec<f32> = raw
+        .chunks(channels)
+        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+        .collect();
+    cleanup(&mut samples, spec.sample_rate);
+    Ok((samples, spec.sample_rate))
+}
+
 /// 远程 TTS 服务（如 IndexTTS sidecar）：POST /tts -> WAV。
 pub struct RemoteTts {
     url: String,
     client: reqwest::blocking::Client,
-    sample_rate: u32,
 }
 
 impl RemoteTts {
@@ -55,12 +76,11 @@ impl RemoteTts {
         Ok(Self {
             url: url.into().trim_end_matches('/').to_string(),
             client,
-            sample_rate: 22_050,
         })
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
+        22_050
     }
 
     pub fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
@@ -73,25 +93,54 @@ impl RemoteTts {
         if !status.is_success() {
             bail!("远程 TTS 返回 {status}");
         }
-        let bytes = response.bytes()?;
-        let mut reader = hound::WavReader::new(std::io::Cursor::new(bytes.as_ref()))?;
-        let spec = reader.spec();
-        let channels = spec.channels.max(1) as usize;
-        let raw: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Int => reader
-                .samples::<i16>()
-                .map(|s| s.map(|v| v as f32 / 32768.0))
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            hound::SampleFormat::Float => reader
-                .samples::<f32>()
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-        };
-        let mut samples: Vec<f32> = raw
-            .chunks(channels)
-            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-            .collect();
-        cleanup(&mut samples, spec.sample_rate);
-        Ok((samples, spec.sample_rate))
+        decode_wav(&response.bytes()?)
+    }
+}
+
+/// 智谱 GLM-TTS 云端克隆音色。
+pub struct GlmTts {
+    key: String,
+    voice: String,
+    client: reqwest::blocking::Client,
+}
+
+impl GlmTts {
+    pub fn new(key: impl Into<String>, voice: impl Into<String>) -> Result<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        Ok(Self {
+            key: key.into(),
+            voice: voice.into(),
+            client,
+        })
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        24_000
+    }
+
+    pub fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
+        let response = self
+            .client
+            .post("https://open.bigmodel.cn/api/paas/v4/audio/speech")
+            .bearer_auth(&self.key)
+            .json(&serde_json::json!({
+                "model": "glm-tts",
+                "input": text,
+                "voice": self.voice,
+                "response_format": "wav",
+                "speed": 1.0
+            }))
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!(
+                "GLM TTS 返回 {status}: {}",
+                response.text().unwrap_or_default()
+            );
+        }
+        decode_wav(&response.bytes()?)
     }
 }
 

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "activeMapId": "map-3e5e5329ee47",
+  "updatedAt": "2026-10-27T01:27:56.218Z",
+  "maps": [
+    {
+      "id": "map-3e5e5329ee47",
+      "title": "欢迎使用 AirMind",
+      "revision": 1,
+      "themeId": "dsh",
+      "direction": 2,
+      "nodeCount": 27,
+      "createdAt": "2026-10-27T01:27:56.218Z",
+      "updatedAt": "2026-10-27T01:27:56.218Z",
+      "ai": false
+    }
+  ]
+}
