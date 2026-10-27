@@ -5,6 +5,8 @@
 
 use anyhow::{bail, Context, Result};
 use gabtwin_asr::{Asr, AsrConfig, AsrUpdate};
+use aec3::nodes::audio::AudioFormat;
+use aec3::pipelines::linear::{self, LinearPipeline};
 use gabtwin_audio::{downmix, recv_chunk, rms, Capture, CaptureConfig};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -116,6 +118,8 @@ pub struct SessionConfig {
     pub offline: Option<OfflineAsrConfig>,
     /// TTS 播放期间置位：不喂识别器，避免把自己的声音当成用户说话。
     pub mute: Option<Arc<AtomicBool>>,
+    /// 播放端参考信号；Some 时启用 AEC3，麦克风可以边播边听。
+    pub aec_render: Option<gabtwin_audio::RenderTap>,
 }
 
 impl SessionConfig {
@@ -128,6 +132,7 @@ impl SessionConfig {
             warmup_ms: 0,
             offline: None,
             mute: None,
+            aec_render: None,
         }
     }
 }
@@ -246,6 +251,34 @@ impl Stats {
 }
 
 /// 从麦克风跑一轮会话，直到 `stop` 置位。
+fn aec_filter(
+    pipeline: &mut LinearPipeline,
+    render: &gabtwin_audio::RenderTap,
+    mono: &[f32],
+    sr: u32,
+) -> Vec<f32> {
+    let input = if sr == 16_000 {
+        mono.to_vec()
+    } else {
+        gabtwin_audio::resample_linear(mono, sr, 16_000)
+    };
+    let mut output = Vec::with_capacity(input.len());
+    for chunk in input.chunks(160) {
+        let mut capture_frame = [0.0f32; 160];
+        capture_frame[..chunk.len()].copy_from_slice(chunk);
+        let render_frame = render.pop(160);
+        let _ = pipeline.handle_render_frame(&render_frame);
+        let mut processed = [0.0f32; 160];
+        let _ = pipeline.process_capture_frame(&capture_frame, &mut processed);
+        output.extend_from_slice(&processed[..chunk.len()]);
+    }
+    if sr == 16_000 {
+        output
+    } else {
+        gabtwin_audio::resample_linear(&output, 16_000, sr)
+    }
+}
+
 pub fn run_mic<F>(cfg: &SessionConfig, stop: Arc<AtomicBool>, mut sink: F) -> Result<()>
 where
     F: FnMut(SessionEvent),
@@ -293,6 +326,28 @@ where
 
     let sr = capture.sample_rate;
     let channels = capture.channels as usize;
+    let mut aec_pipeline = if cfg.aec_render.is_some() {
+        let format = AudioFormat::ten_ms(16_000, 1);
+        match linear::builder(format, format).initial_delay_ms(0).build() {
+            Ok(pipeline) => {
+                sink(SessionEvent::Warning {
+                    message: "AEC3 已启用：播放时麦克风保持开启".into(),
+                });
+                Some(pipeline)
+            }
+            Err(err) => {
+                sink(SessionEvent::Warning {
+                    message: format!("AEC3 初始化失败，退回半双工：{err:#}"),
+                });
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(render) = &cfg.aec_render {
+        render.clear();
+    }
     warmup(&mut asr, sr, cfg.warmup_ms);
     sink(SessionEvent::Device {
         name: capture.device_name.clone(),
@@ -348,7 +403,13 @@ where
 
         while pending.len() >= chunk_samples {
             let frame: Vec<f32> = pending.drain(..chunk_samples).collect();
-            let mono = downmix(&frame, channels);
+            let mono_raw = downmix(&frame, channels);
+            let mono = match (&mut aec_pipeline, cfg.aec_render.as_ref()) {
+                (Some(pipeline), Some(render)) => {
+                    aec_filter(pipeline, render, &mono_raw, sr)
+                }
+                _ => mono_raw,
+            };
             segment_audio.extend_from_slice(&mono);
             let level = rms(&mono);
             stats.on_audio(&mono, level, cfg.onset_rms);
@@ -627,5 +688,57 @@ mod tests {
         std::env::set_var("GABTWIN_HOME", "/tmp/gabtwin-test");
         assert_eq!(gabtwin_home(), PathBuf::from("/tmp/gabtwin-test"));
         std::env::remove_var("GABTWIN_HOME");
+    }
+}
+
+#[cfg(test)]
+mod aec_tests {
+    use aec3::nodes::audio::AudioFormat;
+    use aec3::pipelines::linear;
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|v| v * v).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn aec3_suppresses_delayed_echo() {
+        let rate = 16_000u32;
+        let frame = 160usize;
+        let frames = 400usize; // 4 s
+        let format = AudioFormat::ten_ms(rate, 1);
+        let mut pipeline = linear::builder(format, format)
+            .initial_delay_ms(20)
+            .build()
+            .expect("pipeline");
+
+        let mut seed = 0x1234_5678u32;
+        let mut render = vec![0.0f32; frame * frames];
+        for sample in &mut render {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *sample = ((seed >> 8) as f32 / 16_777_216.0 - 0.5) * 0.5;
+        }
+        let delay = frame * 2; // 20 ms
+        let mut capture = vec![0.0f32; render.len()];
+        for i in delay..capture.len() {
+            capture[i] = render[i - delay] * 0.4;
+        }
+        let mut output = vec![0.0f32; capture.len()];
+        for f in 0..frames {
+            let r = &render[f * frame..(f + 1) * frame];
+            let c = &capture[f * frame..(f + 1) * frame];
+            pipeline.handle_render_frame(r).expect("render");
+            let mut processed = [0.0f32; 160];
+            pipeline
+                .process_capture_frame(c, &mut processed)
+                .expect("capture");
+            output[f * frame..(f + 1) * frame].copy_from_slice(&processed);
+        }
+
+        let start = frame * 200; // 收敛 2 s 后
+        let before = rms(&capture[start..]);
+        let after = rms(&output[start..]);
+        let erle = 20.0 * (before / after.max(1e-9)).log10();
+        println!("AEC ERLE = {erle:.1} dB ({before:.5} -> {after:.5})");
+        assert!(erle > 6.0, "ERLE too low: {erle:.1} dB");
     }
 }

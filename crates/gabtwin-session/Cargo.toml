@@ -11,3 +11,4 @@ serde.workspace = true
 hound.workspace = true
 gabtwin-audio = { path = "../gabtwin-audio" }
 gabtwin-asr = { path = "../gabtwin-asr" }
+aec3 = "0.4"

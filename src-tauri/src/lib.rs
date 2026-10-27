@@ -1,5 +1,5 @@
 use chrono::Local;
-use gabtwin_audio::{resample_linear, start_speaker};
+use gabtwin_audio::{resample_linear, start_speaker_with_render, RenderTap};
 use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
@@ -56,6 +56,8 @@ struct TtsState {
     label: Arc<Mutex<(String, String)>>,
     /// 最近一轮 TTS 的全文 + 结束时刻，用于过滤残余回声。
     last_reply: Arc<Mutex<(String, Option<Instant>)>>,
+    /// 扬声器实际播出的参考信号，供 AEC3 使用。
+    render: RenderTap,
 }
 
 impl TtsState {
@@ -67,6 +69,7 @@ impl TtsState {
         let speaking = Arc::new(AtomicBool::new(false));
         let label = Arc::new(Mutex::new(("—".to_string(), String::new())));
         let last_reply = Arc::new(Mutex::new((String::new(), None)));
+        let render = RenderTap::new();
         let tx = start_tts_worker(
             app,
             generation.clone(),
@@ -76,6 +79,7 @@ impl TtsState {
             speaking.clone(),
             label.clone(),
             last_reply.clone(),
+            render.clone(),
         );
         Self {
             tx: Mutex::new(Some(tx)),
@@ -92,6 +96,7 @@ impl TtsState {
             speaking,
             label,
             last_reply,
+            render,
         }
     }
 
@@ -234,6 +239,7 @@ fn start_tts_worker(
     speaking: Arc<AtomicBool>,
     label: Arc<Mutex<(String, String)>>,
     last_reply: Arc<Mutex<(String, Option<Instant>)>>,
+    render: RenderTap,
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -291,7 +297,7 @@ fn start_tts_worker(
             synth.sample_rate(),
             warm.elapsed().as_millis()
         ));
-        let speaker = match start_speaker() {
+        let speaker = match start_speaker_with_render(render) {
             Ok(speaker) => speaker,
             Err(err) => {
                 log(format!("音频输出不可用：{err:#}"));
@@ -589,24 +595,32 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     *state.stop.lock().unwrap() = stop.clone();
 
     let mut cfg = SessionConfig::new(model_dir());
+    let aec_enabled = std::env::var("GABTWIN_AEC")
+        .map(|value| value != "0")
+        .unwrap_or(true);
     if let Some(tts) = app.try_state::<TtsState>() {
-        // 默认播放时一律闭麦，避免 TTS 被麦克风收进去形成回声循环。
-        // 只有显式 GABTWIN_BARGE_IN=1 且耳机时才保留麦克风做插话。
-        let barge_in = std::env::var("GABTWIN_BARGE_IN")
-            .map(|value| value == "1")
-            .unwrap_or(false);
-        let allow_barge = barge_in && tts.headphones.load(Ordering::SeqCst);
-        if !allow_barge {
-            cfg.mute = Some(tts.mute.clone());
-        }
-        log(format!(
-            "麦克风策略：{}",
-            if allow_barge {
-                "耳机 + 插话（GABTWIN_BARGE_IN=1）"
-            } else {
-                "TTS 播放时闭麦（默认）"
+        if aec_enabled {
+            tts.render.clear();
+            cfg.aec_render = Some(tts.render.clone());
+            log("麦克风策略：AEC3 回声消除（播放时开麦，可插话）");
+        } else {
+            // 不开 AEC 时：默认播放时闭麦；只有显式 GABTWIN_BARGE_IN=1 且耳机才开麦。
+            let barge_in = std::env::var("GABTWIN_BARGE_IN")
+                .map(|value| value == "1")
+                .unwrap_or(false);
+            let allow_barge = barge_in && tts.headphones.load(Ordering::SeqCst);
+            if !allow_barge {
+                cfg.mute = Some(tts.mute.clone());
             }
-        ));
+            log(format!(
+                "麦克风策略：{}",
+                if allow_barge {
+                    "耳机 + 插话（GABTWIN_BARGE_IN=1）"
+                } else {
+                    "TTS 播放时闭麦（GABTWIN_AEC=0）"
+                }
+            ));
+        }
     }
     if let Ok(device) = std::env::var("GABTWIN_DEVICE") {
         if !device.is_empty() {
@@ -652,9 +666,8 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
                     let barge_in = std::env::var("GABTWIN_BARGE_IN")
                         .map(|value| value == "1")
                         .unwrap_or(false);
-                    if barge_in
+                    if (aec_enabled || (barge_in && tts.headphones.load(Ordering::SeqCst)))
                         && tts.speaking.load(Ordering::SeqCst)
-                        && tts.headphones.load(Ordering::SeqCst)
                     {
                         tts.stop();
                         if let Some(llm) = llm_app.try_state::<LlmState>() {

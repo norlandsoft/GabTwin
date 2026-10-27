@@ -12,8 +12,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapRb};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DeviceInfo {
@@ -246,6 +247,55 @@ pub enum SpeakerCommand {
     Quit,
 }
 
+/// 播放端参考信号：把实际播出的样本降到 16 kHz，给 AEC 做 render 输入。
+#[derive(Clone, Debug)]
+pub struct RenderTap {
+    queue: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl Default for RenderTap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RenderTap {
+    pub fn new() -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(VecDeque::with_capacity(16_000))),
+        }
+    }
+
+    /// 音频回调里调用；只有 48k->16k 抽出的样本才进来，避免回调里做重活。
+    fn push(&self, value: f32) {
+        if let Ok(mut queue) = self.queue.try_lock() {
+            if queue.len() >= 32_000 {
+                queue.pop_front();
+            }
+            queue.push_back(value);
+        }
+    }
+
+    /// 会话线程每次取 10 ms / 160 个 16 kHz 样本；不够补零。
+    pub fn pop(&self, count: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(count);
+        if let Ok(mut queue) = self.queue.lock() {
+            for _ in 0..count {
+                out.push(queue.pop_front().unwrap_or(0.0));
+            }
+        } else {
+            out.resize(count, 0.0);
+        }
+        out
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.clear();
+        }
+    }
+}
+
 /// 播放句柄。真正的 cpal 输出流在自己的线程里，句柄只负责投递音频。
 pub struct SpeakerHandle {
     tx: mpsc::Sender<SpeakerCommand>,
@@ -253,6 +303,8 @@ pub struct SpeakerHandle {
     pub sample_rate: u32,
     /// 输出设备是耳机/耳麦时，回声很小，可以边播边听、支持插话。
     pub headphones: bool,
+    /// 实际播出的参考信号，供 AEC 使用。
+    pub render: RenderTap,
 }
 
 impl SpeakerHandle {
@@ -269,13 +321,18 @@ const SPEAKER_RING_SAMPLES: usize = 48_000 * 10;
 
 /// 启动默认输出设备；返回句柄和实际输出采样率。
 pub fn start_speaker() -> Result<SpeakerHandle> {
+    start_speaker_with_render(RenderTap::new())
+}
+
+pub fn start_speaker_with_render(render: RenderTap) -> Result<SpeakerHandle> {
+    let render_for_stream = render.clone();
     let (tx, rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let clear = Arc::new(AtomicBool::new(false));
     let clear_for_thread = clear.clone();
     std::thread::spawn(move || {
         let (mut producer, consumer) = HeapRb::<f32>::new(SPEAKER_RING_SAMPLES).split();
-        match build_output_stream(consumer, clear_for_thread.clone()) {
+        match build_output_stream(consumer, clear_for_thread.clone(), render_for_stream.clone()) {
             Ok((stream, rate, headphones)) => {
                 let _ = ready_tx.send(Ok((rate, headphones)));
                 while let Ok(command) = rx.recv() {
@@ -309,6 +366,7 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
             clear,
             sample_rate: rate,
             headphones,
+            render,
         }),
         Ok(Err(message)) => Err(anyhow!(message)),
         Err(_) => Err(anyhow!("启动音频输出超时")),
@@ -318,6 +376,7 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
 fn build_output_stream(
     consumer: HeapCons<f32>,
     clear: Arc<AtomicBool>,
+    render: RenderTap,
 ) -> Result<(cpal::Stream, u32, bool), anyhow::Error> {
     let host = cpal::default_host();
     let device = host
@@ -342,6 +401,7 @@ fn build_output_stream(
         .unwrap_or(false);
     let channels = config.channels as usize;
     let rate = config.sample_rate;
+    let ratio = 16_000.0 / rate as f64;
     let err_fn = |err| eprintln!("[audio] 输出流错误：{err}");
     let mut consumer = Some(consumer);
 
@@ -349,9 +409,13 @@ fn build_output_stream(
         SampleFormat::F32 => {
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
+            let render = render.clone();
+            let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [f32], _| fill_f32(data, channels, &mut cons, &clear),
+                move |data: &mut [f32], _| {
+                    fill_f32(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                },
                 err_fn,
                 None,
             )?
@@ -359,9 +423,13 @@ fn build_output_stream(
         SampleFormat::I16 => {
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
+            let render = render.clone();
+            let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [i16], _| fill_i16(data, channels, &mut cons, &clear),
+                move |data: &mut [i16], _| {
+                    fill_i16(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                },
                 err_fn,
                 None,
             )?
@@ -369,9 +437,13 @@ fn build_output_stream(
         SampleFormat::U16 => {
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
+            let render = render.clone();
+            let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
-                move |data: &mut [u16], _| fill_u16(data, channels, &mut cons, &clear),
+                move |data: &mut [u16], _| {
+                    fill_u16(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                },
                 err_fn,
                 None,
             )?
@@ -389,7 +461,15 @@ fn next_sample(consumer: &mut HeapCons<f32>, clear: &AtomicBool) -> f32 {
     consumer.try_pop().unwrap_or(0.0)
 }
 
-fn fill_f32(data: &mut [f32], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
+fn fill_f32(
+    data: &mut [f32],
+    channels: usize,
+    consumer: &mut HeapCons<f32>,
+    clear: &AtomicBool,
+    render: &RenderTap,
+    phase: &mut f64,
+    ratio: f64,
+) {
     if channels == 0 {
         return;
     }
@@ -399,10 +479,23 @@ fn fill_f32(data: &mut [f32], channels: usize, consumer: &mut HeapCons<f32>, cle
         for c in 0..channels {
             data[i * channels + c] = value;
         }
+        *phase += ratio;
+        if *phase >= 1.0 {
+            *phase -= 1.0;
+            render.push(value);
+        }
     }
 }
 
-fn fill_i16(data: &mut [i16], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
+fn fill_i16(
+    data: &mut [i16],
+    channels: usize,
+    consumer: &mut HeapCons<f32>,
+    clear: &AtomicBool,
+    render: &RenderTap,
+    phase: &mut f64,
+    ratio: f64,
+) {
     if channels == 0 {
         return;
     }
@@ -413,10 +506,23 @@ fn fill_i16(data: &mut [i16], channels: usize, consumer: &mut HeapCons<f32>, cle
         for c in 0..channels {
             data[i * channels + c] = sample;
         }
+        *phase += ratio;
+        if *phase >= 1.0 {
+            *phase -= 1.0;
+            render.push(value);
+        }
     }
 }
 
-fn fill_u16(data: &mut [u16], channels: usize, consumer: &mut HeapCons<f32>, clear: &AtomicBool) {
+fn fill_u16(
+    data: &mut [u16],
+    channels: usize,
+    consumer: &mut HeapCons<f32>,
+    clear: &AtomicBool,
+    render: &RenderTap,
+    phase: &mut f64,
+    ratio: f64,
+) {
     if channels == 0 {
         return;
     }
@@ -426,6 +532,11 @@ fn fill_u16(data: &mut [u16], channels: usize, consumer: &mut HeapCons<f32>, cle
         let sample = (((value.clamp(-1.0, 1.0) * 0.5) + 0.5) * u16::MAX as f32) as u16;
         for c in 0..channels {
             data[i * channels + c] = sample;
+        }
+        *phase += ratio;
+        if *phase >= 1.0 {
+            *phase -= 1.0;
+            render.push(value);
         }
     }
 }

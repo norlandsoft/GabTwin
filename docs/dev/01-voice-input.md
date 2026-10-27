@@ -186,6 +186,14 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 - **耳机 + `GABTWIN_BARGE_IN=1`**：麦克风保持开启，可语音插话；耳机物理隔离，
   不会把外放收进来。
 
-> 外放 + 麦克风想同时"语音插话"和"不收扬声器"，纯软件闭麦做不到；
-> 需要 AEC（WebRTC AEC3 / SpeexDSP / macOS Voice Processing）。
-> 当前外放采用"闭麦 + 回声文本过滤 + Esc 手动打断"，耳机采用"开麦 + 语音插话"。
+### AEC3（默认开启）
+
+- `gabtwin-audio::RenderTap` 在扬声器回调里取出**实际播出**的样本，抽到 16 kHz；
+- `gabtwin-session` 用 `aec3`（WebRTC AEC3 的纯 Rust 移植）把 render 与麦克风
+  capture 做自适应消除，处理后的音频才进 ASR；
+- 默认 `GABTWIN_AEC=1`：TTS 播放时**不闭麦**，外放/耳机都能语音插话；
+- `GABTWIN_AEC=0` 回到原来的半双工（播放时闭麦）+ Esc；
+- 800 ms 守卫和回声文本过滤仍然保留，作为 AEC 失效时的兜底。
+
+> 合成延迟回声测试 ERLE ≈ 62 dB；真实房间的扬声器/麦克风延迟不同，
+> 若仍有残留，先调 `aec3` 的 `initial_delay_ms`（当前 0）或报告具体设备。
