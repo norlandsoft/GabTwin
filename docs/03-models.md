@@ -128,7 +128,7 @@
 models/
   asr/   streaming-paraformer-bilingual-zh-en、sense-voice-*、streaming-zipformer-*
   tts/   zipvoice-zh-en、matcha-zh-en、vits-zh-ll、kokoro-*、index-tts-2.5-mlx、breeze-*
-  llm/   qwen2.5-7b-4bit
+  llm/   qwen3.5-9b-abliterated-4bit
 ```
 
 - `GABTWIN_MODELS_DIR` 可覆盖根目录；应用默认取仓库 `models/`，找不到时回退

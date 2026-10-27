@@ -111,22 +111,21 @@ UI 的"首 token"读数就是这一段；mock 下是 1 ms，不要拿它当真�
 
 ---
 
-## 本地小模型（Qwen2.5-7B，MLX）
+## 本地小模型（历史：Qwen2.5-7B，MLX）
 
 > 2026-10-27：聊天默认切到本地，不再依赖 DeepSeek。云端只保留为可选回退。
 
 - 运行时：`mlx-lm 0.32`，经典入口 `mlx_lm.server`（启动时加载权重）提供 OpenAI 兼容的
   `/v1/chat/completions`（SSE 流式）；**请求里的 `model` 必须是本地绝对路径**，
   否则 server 会把它当成 HF repo 去拉；
-- 模型：`mlx-community/Qwen2.5-7B-Instruct-4bit`，4.3 GB，放在
-  `models/llm/qwen2.5-7b-4bit/`；
+- 2026-10-28 已删除 7B；当前默认见下方 **Qwen3.5-9B abliterated** 一节。
 - 启动脚本默认：
   ```bash
   ./scripts/gabtwin-start.sh
   # 自动启动 mlx_lm server (:8080)，并导出
   # GABTWIN_LLM_BASE=http://127.0.0.1:8080/v1
   # GABTWIN_LLM_KEY=local
-  # GABTWIN_LLM_MODEL=qwen2.5-7b-4bit
+  # GABTWIN_LLM_MODEL=<本地模型绝对路径>
   ```
 - 回云端：`GABTWIN_LLM=deepseek ./scripts/gabtwin-start.sh`（需要 `.env`
   里的 `DEEPSEEK_API_KEY`，脚本不会起本地 server）。
