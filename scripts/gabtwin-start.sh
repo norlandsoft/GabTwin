@@ -16,7 +16,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  . "$ROOT/.env"
+  set +a
+fi
+GABTWIN_HOME="${GABTWIN_HOME:-$ROOT/workspace}"
+export GABTWIN_HOME
 export GABTWIN_MODELS_DIR="$ROOT/models"
 export GABTWIN_TTS="${GABTWIN_TTS:-qwen3tts}"
 MODEL_DIR="${GABTWIN_MODEL_DIR:-$GABTWIN_MODELS_DIR/asr/streaming-paraformer-bilingual-zh-en}"

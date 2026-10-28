@@ -65,10 +65,10 @@ models/
 cargo run -p gabtwin-probe -- --list-devices
 
 # 无麦克风：用共用示例 WAV
-cargo run -p gabtwin-probe -- --wav "$HOME/Library/Application Support/GabTwin/samples/0.wav"
+cargo run -p gabtwin-probe -- --wav "$GABTWIN_HOME/samples/0.wav"
 
 # 按真实语速回放：看"字幕跟着说话出现"的节奏
-cargo run -p gabtwin-probe -- --wav "$HOME/Library/Application Support/GabTwin/samples/0.wav" --realtime
+cargo run -p gabtwin-probe -- --wav "$GABTWIN_HOME/samples/0.wav" --realtime
 
 # 真实麦克风，10 秒
 cargo run -p gabtwin-probe -- --mic --seconds 10 --verbose
@@ -96,7 +96,7 @@ GABTWIN_AUTOREPLAY=1 ./scripts/gabtwin-start.sh
 
 | 变量 | 作用 |
 |---|---|
-| `GABTWIN_HOME` | 根目录，默认 `~/Library/Application Support/GabTwin` |
+| `GABTWIN_HOME` | 运行数据根目录，默认 `<repo>/workspace` |
 | `GABTWIN_MODEL_DIR` | 直接指定模型目录 |
 | `GABTWIN_DEVICE` | 指定输入设备名 |
 | `GABTWIN_ENDPOINT` | 句尾静音秒数（默认 0.8） |

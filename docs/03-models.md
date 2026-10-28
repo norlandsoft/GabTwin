@@ -61,7 +61,7 @@
 ## 存储布局
 
 ```text
-~/Library/Application Support/GabTwin/
+$GABTWIN_HOME/
 ├── config.toml
 ├── models/
 │   ├── sensevoice/

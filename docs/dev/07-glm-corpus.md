@@ -24,7 +24,7 @@
 
 # 1) 克隆（只做一次，voice_id 存到 $GABTWIN_HOME/voices/glm/gabtwin.json）
 .venv-mlx/bin/python scripts/glm_tts_corpus.py clone \
-  --ref "$HOME/Library/Application Support/GabTwin/tts/glm-ref.wav" \
+  --ref "$GABTWIN_HOME/tts/glm-ref.wav" \
   --ref-text "收到那俄罗斯人给我的打款了，我就给了他支付宝账号，他支付宝里有钱。" \
   --name gabtwin
 

@@ -10,7 +10,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  . "$ROOT/.env"
+  set +a
+fi
+GABTWIN_HOME="${GABTWIN_HOME:-$ROOT/workspace}"
+export GABTWIN_HOME
 BIN="$ROOT/target/debug/gabtwin-app"
 PID_FILE="$GABTWIN_HOME/gabtwin-app.pid"
 LOG="$GABTWIN_HOME/logs/app.log"

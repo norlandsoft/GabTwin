@@ -25,6 +25,10 @@ pub fn gabtwin_home() -> PathBuf {
     if let Some(dir) = std::env::var_os("GABTWIN_HOME") {
         return PathBuf::from(dir);
     }
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workspace");
+    if repo.is_dir() {
+        return repo;
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));

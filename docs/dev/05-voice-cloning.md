@@ -65,7 +65,7 @@ ffmpeg -ss 3.8 -t 5 -i talk.wav \
 ## 用法
 
 ```bash
-export GABTWIN_TTS_MODEL_DIR="$HOME/Library/Application Support/GabTwin/models/zipvoice-zh-en"
+export GABTWIN_TTS_MODEL_DIR="$ROOT/models/tts/zipvoice-zh-en"
 export GABTWIN_TTS_REF_WAV="/path/to/reference.wav"
 export GABTWIN_TTS_REF_TEXT="参考录音里说的那句话"
 ./scripts/gabtwin-start.sh

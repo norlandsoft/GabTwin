@@ -52,7 +52,7 @@ LLM 流式 delta
 ## 单独验 TTS
 
 ```bash
-cargo run -p gabtwin-probe -- --tts "$HOME/Library/Application Support/GabTwin/models/vits-zh-ll" \
+cargo run -p gabtwin-probe -- --tts "$ROOT/models/tts/vits-zh-ll" \
   --text "你好，我是 GabTwin。" --out /tmp/tts.wav
 afplay /tmp/tts.wav
 ```
@@ -71,7 +71,7 @@ TTS 是逐句合成再拼接的，切得不对就会"在句子中间断气"。�
 试听分句效果：
 
 ```bash
-cargo run -p gabtwin-probe -- --tts "$HOME/Library/Application Support/GabTwin/models/matcha-zh-en" \
+cargo run -p gabtwin-probe -- --tts "$ROOT/models/tts/matcha-zh-en" \
   --split --text "嗯，我听到了。你刚才问的是现在几点。现在大概是晚上八点四十，你想知道具体的时间吗？" \
   --out /tmp/split.wav
 ```

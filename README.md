@@ -34,11 +34,11 @@ cp .env.example .env && chmod 600 .env   # 填入 DEEPSEEK_API_KEY；.env 已被
 ./scripts/gabtwin-stop.sh      # 停止
 
 # 命令行验证（不打开窗口）
-cargo run -p gabtwin-probe -- --wav "$HOME/Library/Application Support/GabTwin/models/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav"
+cargo run -p gabtwin-probe -- --wav "$ROOT/models/asr/streaming-zipformer-zh-int8-2025-06-30/test_wavs/0.wav"
 cargo run -p gabtwin-probe -- --mic --seconds 10
 ```
 
-启动日志在 `~/Library/Application Support/GabTwin/logs/app.log`。
+启动日志在 `$GABTWIN_HOME/logs/app.log`。
 `gabtwin-stop.sh` 默认只停脚本启动的实例；手动启动的用 `./scripts/gabtwin-stop.sh --all`。
 
 模型需要先下载，见 [docs/dev/01](docs/dev/01-voice-input.md)。

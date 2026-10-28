@@ -32,18 +32,18 @@ PROBE = ROOT / "target" / "debug" / "gabtwin-probe"
 HOME = Path(
     os.environ.get(
         "GABTWIN_HOME",
-        Path.home() / "Library" / "Application Support" / "GabTwin",
+        ROOT / "workspace",
     )
 )
 
 MODELS = {
-    "zipformer-zh": HOME / "models" / "streaming-zipformer-zh-int8-2025-06-30",
-    "bilingual": HOME / "models" / "streaming-zipformer-bilingual-zh-en-2023-02-20",
+    "zipformer-zh": ROOT / "models" / "asr" / "streaming-zipformer-zh-int8-2025-06-30",
+    "bilingual": ROOT / "models" / "asr" / "streaming-zipformer-bilingual-zh-en-2023-02-20",
     "multilingual": HOME
     / "models"
     / "streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10",
-    "small-ctc": HOME / "models" / "streaming-zipformer-small-ctc-zh-int8-2025-04-01",
-    "paraformer": HOME / "models" / "streaming-paraformer-bilingual-zh-en",
+    "small-ctc": ROOT / "models" / "asr" / "streaming-zipformer-small-ctc-zh-int8-2025-04-01",
+    "paraformer": ROOT / "models" / "asr" / "streaming-paraformer-bilingual-zh-en",
 }
 
 TEST_SET = [

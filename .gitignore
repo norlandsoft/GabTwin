@@ -54,3 +54,6 @@ __pycache__/
 .idea/
 .vscode/
 *.tmp
+
+# 本地运行数据（日志/参考音/语料/录音）
+/workspace/

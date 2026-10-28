@@ -28,7 +28,7 @@ import soundfile as sf
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = "https://open.bigmodel.cn/api/paas/v4"
-HOME = Path(os.environ.get("GABTWIN_HOME", Path.home() / "Library/Application Support/GabTwin"))
+HOME = Path(os.environ.get("GABTWIN_HOME", Path(__file__).resolve().parents[1] / "workspace"))
 VOICES = HOME / "voices" / "glm"
 DATASET = HOME / "dataset" / "glm"
 CORPUS = ROOT / "data" / "glm_corpus.jsonl"

@@ -7,7 +7,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
-HOME = Path(os.environ.get("GABTWIN_HOME", Path.home() / "Library/Application Support/GabTwin"))
+HOME = Path(os.environ.get("GABTWIN_HOME", Path(__file__).resolve().parents[1] / "workspace"))
 
 
 def main() -> None:

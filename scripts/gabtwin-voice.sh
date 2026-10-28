@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # 切换克隆音色：./scripts/gabtwin-voice.sh [list|talk|talk2]
 set -euo pipefail
-HOME_DIR="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  . "$ROOT/.env"
+  set +a
+fi
+HOME_DIR="${GABTWIN_HOME:-$ROOT/workspace}"
+export GABTWIN_HOME="$HOME_DIR"
 VOICES="$HOME_DIR/tts/voices"
 TARGET="$HOME_DIR/tts"
 

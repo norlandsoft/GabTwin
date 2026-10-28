@@ -28,7 +28,13 @@ unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export NO_PROXY='*' no_proxy='*'
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GABTWIN_HOME="${GABTWIN_HOME:-$HOME/Library/Application Support/GabTwin}"
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  . "$ROOT/.env"
+  set +a
+fi
+GABTWIN_HOME="${GABTWIN_HOME:-$ROOT/workspace}"
+export GABTWIN_HOME
 MODELS_ROOT="${GABTWIN_MODELS_DIR:-$ROOT/models}"
 MIRROR="${GABTWIN_HF_MIRROR:-https://hf-mirror.com}"
 JOBS="${GABTWIN_FETCH_JOBS:-4}"
