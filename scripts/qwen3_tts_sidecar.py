@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import soundfile as sf
 from mlx_audio.tts.utils import load_model
+from scipy.signal import butter, lfilter, lfilter_zi
 
 MODEL = None
 REF = None
@@ -62,6 +63,18 @@ def reset_session() -> None:
 
 def pcm_bytes(audio: np.ndarray) -> bytes:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+class HighPass:
+    """90 Hz 二阶高通，去掉 Qwen 输出里的低频/直流“电子底音”。"""
+
+    def __init__(self, sample_rate: int = 24000, cutoff: float = 90.0):
+        self.b, self.a = butter(2, cutoff / (sample_rate / 2), btype="highpass")
+        self.zi = lfilter_zi(self.b, self.a) * 0.0
+
+    def push(self, audio: np.ndarray) -> np.ndarray:
+        y, self.zi = lfilter(self.b, self.a, np.asarray(audio, dtype=np.float32), zi=self.zi)
+        return y.astype(np.float32)
 
 
 class FadeStream:
@@ -201,6 +214,7 @@ def generate(text: str):
 
 def wav_bytes(text: str) -> bytes:
     audio, rate = generate(text)
+    audio = HighPass(rate).push(audio)
     audio = fade_edges(audio, rate)
     audio = extend_pauses(audio, rate)
     buffer = io.BytesIO()
@@ -269,6 +283,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             extender = PauseExtender(24000, PAUSE_EXTRA_MS, PAUSE_MIN_MS) if PAUSE else None
             fader = FadeStream(24000)
+            hpf = HighPass(24000)
             ref_audio, ref_text = current_ref()
             session_audio = []
             with LOCK:
@@ -286,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     audio = np.array(result.audio, dtype=np.float32)
                     session_audio.append(audio)
+                    audio = hpf.push(audio)
                     audio = fader.push(audio)
                     if extender is not None:
                         audio = extender.push(audio)

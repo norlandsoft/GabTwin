@@ -320,3 +320,10 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 一次性生成本身：97 字实测 `stream=False` 16.16 s、`stream=True` 17.84 s，
 ASR 都完整；如果仍想试整段生成，可设 `GABTWIN_TTS_ONE_SHOT=1`。
 之前长文“混乱”的主因是播放环形缓冲满丢样本（已加 6 s 背压）。
+
+
+### 低频底音
+
+Qwen 输出带一点低频/直流分量，流式路径原本没有走应用里的 80 Hz 高通。
+sidecar 现在对每段先做 **90 Hz 二阶高通**，再做淡入淡出、标点停顿和段间静音；
+`/tts` 与 `/tts_stream` 都生效。
