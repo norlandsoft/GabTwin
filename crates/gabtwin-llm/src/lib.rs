@@ -130,6 +130,27 @@ impl LlmClient {
         &self,
         messages: &[Message],
         cancel: &AtomicBool,
+        on_delta: F,
+    ) -> Result<StreamResult>
+    where
+        F: FnMut(&str),
+    {
+        self.stream_chat_with(
+            messages,
+            cancel,
+            self.cfg.temperature,
+            self.cfg.max_tokens,
+            on_delta,
+        )
+    }
+
+    /// 与 `stream_chat` 相同，但允许覆盖 temperature / max_tokens（校对用低温度）。
+    pub fn stream_chat_with<F>(
+        &self,
+        messages: &[Message],
+        cancel: &AtomicBool,
+        temperature: f32,
+        max_tokens: u32,
         mut on_delta: F,
     ) -> Result<StreamResult>
     where
@@ -143,8 +164,8 @@ impl LlmClient {
             "model": self.cfg.model,
             "messages": messages,
             "stream": true,
-            "max_tokens": self.cfg.max_tokens,
-            "temperature": self.cfg.temperature,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         });
 
         let started = Instant::now();

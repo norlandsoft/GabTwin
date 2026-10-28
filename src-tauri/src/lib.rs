@@ -1,6 +1,6 @@
 use chrono::Local;
 use gabtwin_audio::{resample_linear, start_speaker_with_render, RenderTap};
-use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig};
+use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig, Message};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
     replay_wav, run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
@@ -645,8 +645,10 @@ impl LlmState {
         let system = system_prompt_for(persona, &model_hint);
         if let Some(client) = client.clone() {
             let system = system.clone();
+            let correction = correction_system();
             std::thread::spawn(move || {
                 let _ = client.prewarm(&system);
+                let _ = client.prewarm(&correction);
             });
         }
         Self {
@@ -910,9 +912,110 @@ fn queue_segment(app: &AppHandle, text: String) {
         let text = state.pending.lock().unwrap().take();
         if let Some(text) = text {
             if !text.trim().is_empty() {
-                start_llm_turn(&app, text);
+                start_corrected_turn(&app, text);
             }
         }
+    });
+}
+
+fn correction_system() -> String {
+    "You are Qwen, created by Alibaba Cloud. You are a helpful assistant. <|think_off|>\n\
+     你是语音识别（ASR）校对器。只修改 ASR 文本中的错别字、同音字、漏字、多字、专有名词错误和明显的标点/断句问题。\n\
+     必须保持原句结构、口语词、语气和顺序；不要改写、不要总结、不要回答问题、不要添加原文没有的信息；无法确定时保持原样。\n\
+     示例：\n\
+     ASR：我在 get up 上看到一个项目\n\
+     校对：我在 GitHub 上看到一个项目\n\
+     ASR：我想说的是呢大家如果对我的研究感兴趣呢\n\
+     校对：我想说的是呢，大家如果对我的研究感兴趣呢。\n\
+     只输出一行校对后的文本，不要前缀、不要引号、不要解释。"
+        .to_string()
+}
+
+fn correction_messages(history: &[Message], text: &str) -> Vec<Message> {
+    let mut messages = vec![Message::system(correction_system())];
+    let recent: Vec<&Message> = history
+        .iter()
+        .filter(|msg| msg.role != "system")
+        .collect();
+    for msg in recent.iter().rev().take(4).rev() {
+        messages.push((*msg).clone());
+    }
+    messages.push(Message::user(format!(
+        "最近对话仅供理解上下文，不要回答。\nASR 原文：{text}\n只输出校对后的文本。"
+    )));
+    messages
+}
+
+fn sanitize_correction(original: &str, raw: &str) -> String {
+    let line = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let line = line.trim_matches(|c: char| {
+        matches!(c, '"' | '“' | '”' | '「' | '」' | '\'' | '‘' | '’' | '`')
+    });
+    let mut line = line.trim();
+    for prefix in ["校对后：", "纠正后：", "校对：", "纠正：", "ASR 原文：", "原文："] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            line = rest.trim();
+            break;
+        }
+    }
+    let original_len = original.chars().count();
+    let corrected_len = line.chars().count();
+    if line.is_empty() || corrected_len > original_len * 3 + 40 {
+        original.to_string()
+    } else {
+        line.to_string()
+    }
+}
+
+fn start_corrected_turn(app: &AppHandle, text: String) {
+    let enabled = std::env::var("GABTWIN_ASR_CORRECT")
+        .map(|value| value != "0")
+        .unwrap_or(true);
+    if !enabled {
+        start_llm_turn(app, text);
+        return;
+    }
+    let Some(state) = app.try_state::<LlmState>() else {
+        start_llm_turn(app, text);
+        return;
+    };
+    let Some(client) = state.client.clone() else {
+        start_llm_turn(app, text);
+        return;
+    };
+    let history = {
+        let dialog = state.dialog.lock().unwrap();
+        dialog.messages()
+    };
+    let messages = correction_messages(&history, &text);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let previous = std::mem::replace(&mut *state.cancel.lock().unwrap(), cancel.clone());
+    previous.store(true, Ordering::SeqCst);
+    let app_handle = app.clone();
+    let original = text;
+    std::thread::spawn(move || {
+        let result = client.stream_chat_with(&messages, &cancel, 0.2, 180, |_| {});
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        let corrected = match result {
+            Ok(result) if !result.cancelled => sanitize_correction(&original, &result.text),
+            Ok(_) => return,
+            Err(err) => {
+                log(format!("ASR 校对失败，使用原文：{err:#}"));
+                original.clone()
+            }
+        };
+        if corrected == original {
+            log(format!("ASR 校对未改动：{original}"));
+        } else {
+            log(format!("ASR 纠正：{original} → {corrected}"));
+        }
+        start_llm_turn(&app_handle, corrected);
     });
 }
 
