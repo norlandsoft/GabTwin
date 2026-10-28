@@ -225,3 +225,13 @@ ASR 在停顿处会切出两个 Segment。默认在 **600 ms** 内到达的 Segm
 
 超过窗口则作为新一轮处理：新一轮会 **取消旧 LLM、停止旧 TTS**，并丢弃旧轮次的
 结果，因此不会出现两条回答交错。想更宽容可以把窗口调到 900–1200 ms。
+
+
+### PTT 松手收尾
+
+- 松手后的保留时长 = `endpoint_silence_s + 0.5 s`（默认 0.8 + 0.5 = **1.3 s**，
+  最少 1.2 s）；之前固定 800 ms 与端点阈值相同，容易竞态丢最后一段；
+- 如果尾巴结束仍没有 `Segment`，用最后一个流式 `Partial` + SenseVoice 对这段
+  音频强制定稿，不再直接 `reset()`；
+- 当前流式引擎（streaming paraformer）+ SenseVoice 定稿已经够用；
+  换 streaming zipformer 端点规则相同，换模型解决不了“松手太早”，收尾才是关键。

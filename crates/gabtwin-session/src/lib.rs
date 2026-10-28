@@ -385,6 +385,8 @@ where
     let mut was_ptt_off = false;
     let mut ptt_was_on = false;
     let mut ptt_release_tail: Option<Instant> = None;
+    let mut last_partial = String::new();
+    let ptt_tail_ms = ((cfg.asr.endpoint_silence_s * 1000.0) as u64 + 500).max(1200);
 
     while !stop.load(Ordering::Relaxed) {
         let got = recv_chunk(
@@ -409,6 +411,7 @@ where
             if was_ptt_off || ptt_release_tail.is_some() {
                 asr.reset();
                 segment_audio.clear();
+                last_partial.clear();
             }
             ptt_release_tail = None;
             was_ptt_off = false;
@@ -492,12 +495,18 @@ where
                             || rms(&segment_audio) < cfg.min_segment_rms
                         {
                             segment_audio.clear();
+                            last_partial.clear();
                             continue;
                         }
                         let text =
                             finalize_text(offline.as_ref(), sr, &segment_audio, text, &mut stats);
                         segment_audio.clear();
+                        last_partial.clear();
                         stats.on_update(AsrUpdate::Segment(text), &mut sink);
+                    }
+                    AsrUpdate::Partial(text) => {
+                        last_partial = text.clone();
+                        stats.on_update(AsrUpdate::Partial(text), &mut sink);
                     }
                     other => stats.on_update(other, &mut sink),
                 }
