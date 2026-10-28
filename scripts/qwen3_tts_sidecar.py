@@ -64,6 +64,48 @@ def pcm_bytes(audio: np.ndarray) -> bytes:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
+class FadeStream:
+    """给每段音频首尾做短线淡入/淡出，消除拼接爆音。"""
+
+    def __init__(self, sample_rate: int, fade_in_ms: int = 10, fade_out_ms: int = 20):
+        self.in_n = max(1, int(sample_rate * fade_in_ms / 1000))
+        self.out_n = max(1, int(sample_rate * fade_out_ms / 1000))
+        self.in_ramp = np.linspace(0.0, 1.0, self.in_n, dtype=np.float32)
+        self.out_ramp = np.linspace(1.0, 0.0, self.out_n, dtype=np.float32)
+        self.first = True
+        self.tail = np.zeros(0, dtype=np.float32)
+
+    def push(self, audio: np.ndarray) -> np.ndarray:
+        audio = np.asarray(audio, dtype=np.float32).copy()
+        if self.first and len(audio):
+            n = min(self.in_n, len(audio))
+            audio[:n] *= self.in_ramp[:n]
+            self.first = False
+        self.tail = np.concatenate([self.tail, audio])
+        if len(self.tail) > self.out_n:
+            out = self.tail[: -self.out_n]
+            self.tail = self.tail[-self.out_n :]
+            return out
+        return np.zeros(0, dtype=np.float32)
+
+    def flush(self) -> np.ndarray:
+        out = self.tail.copy()
+        self.tail = np.zeros(0, dtype=np.float32)
+        if len(out):
+            n = min(self.out_n, len(out))
+            out[-n:] *= self.out_ramp[-n:]
+        return out
+
+
+def fade_edges(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    audio = np.asarray(audio, dtype=np.float32).copy()
+    n = min(len(audio), max(1, int(sample_rate * 0.01)))
+    audio[:n] *= np.linspace(0.0, 1.0, n, dtype=np.float32)
+    n = min(len(audio), max(1, int(sample_rate * 0.02)))
+    audio[-n:] *= np.linspace(1.0, 0.0, n, dtype=np.float32)
+    return audio
+
+
 class PauseExtender:
     """只在真正的标点停顿（>=300ms 静音）后追加额外静音。"""
 
@@ -149,6 +191,7 @@ def generate(text: str):
 
 def wav_bytes(text: str) -> bytes:
     audio, rate = generate(text)
+    audio = fade_edges(audio, rate)
     audio = extend_pauses(audio, rate)
     buffer = io.BytesIO()
     sf.write(buffer, audio, rate, format="WAV", subtype="PCM_16")
@@ -215,6 +258,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
             extender = PauseExtender(24000, PAUSE_EXTRA_MS, PAUSE_MIN_MS) if PAUSE else None
+            fader = FadeStream(24000)
             ref_audio, ref_text = current_ref()
             session_audio = []
             with LOCK:
@@ -232,6 +276,7 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     audio = np.array(result.audio, dtype=np.float32)
                     session_audio.append(audio)
+                    audio = fader.push(audio)
                     if extender is not None:
                         audio = extender.push(audio)
                     pcm = pcm_bytes(audio)
@@ -240,6 +285,15 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(pcm)
                         self.wfile.write(b"\r\n")
                         self.wfile.flush()
+                tail = fader.flush()
+                if extender is not None:
+                    tail = extender.push(tail)
+                pcm = pcm_bytes(tail)
+                if pcm:
+                    self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
+                    self.wfile.write(pcm)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
                 if extender is not None:
                     pcm = pcm_bytes(extender.flush())
                     if pcm:

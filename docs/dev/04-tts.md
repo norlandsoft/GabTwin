@@ -308,3 +308,13 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 - 生成温度降到 **0.7**，减少段间随机差异；
 - 清空记忆时 app 调 `POST /voice_reset`，下个对话重新锁定；
 - 日志：`[tts] session ref locked: 5.12s`。
+
+
+### 分段拼接淡入淡出
+
+每段音频首尾做 **10 ms 淡入 / 20 ms 淡出**，再做标点停顿和 250 ms 段间静音，
+消除拼接处的爆音/过渡杂音。
+
+一次性生成本身：97 字实测 `stream=False` 16.16 s、`stream=True` 17.84 s，
+ASR 都完整；如果仍想试整段生成，可设 `GABTWIN_TTS_ONE_SHOT=1`。
+之前长文“混乱”的主因是播放环形缓冲满丢样本（已加 6 s 背压）。
