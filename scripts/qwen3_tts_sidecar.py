@@ -17,6 +17,7 @@ MODEL = None
 REF = None
 REF_TEXT = ""
 SAMPLE_RATE = 24000
+SPEED = 0.9
 LOCK = threading.Lock()
 REQUEST_ID = 0
 
@@ -34,6 +35,7 @@ def generate(text: str):
             ref_text=REF_TEXT,
             stream=True,
             streaming_interval=0.25,
+            speed=SPEED,
         ):
             if my_id != REQUEST_ID:
                 print("[tts] cancelled by newer request", flush=True)
@@ -115,6 +117,7 @@ class Handler(BaseHTTPRequestHandler):
                     ref_text=REF_TEXT,
                     stream=True,
                     streaming_interval=0.25,
+                    speed=SPEED,
                 ):
                     if my_id != REQUEST_ID:
                         print("[tts] stream cancelled by newer request", flush=True)
@@ -144,9 +147,12 @@ def main():
     parser.add_argument("--ref", required=True)
     parser.add_argument("--ref-text", required=True)
     parser.add_argument("--port", type=int, default=8800)
+    parser.add_argument("--speed", type=float, default=0.9)
     parser.add_argument("--warmup", default="你好。")
     args = parser.parse_args()
 
+    global SPEED
+    SPEED = args.speed
     REF = args.ref
     REF_TEXT = args.ref_text
     print(f"[tts] loading {args.model}", flush=True)

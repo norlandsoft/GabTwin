@@ -928,7 +928,14 @@ fn is_stage_direction(text: &str) -> bool {
         "靠", "闭", "睁", "握", "摸", "拍", "敲", "打开", "关", "穿", "脱", "倒",
         "喝", "吃", "睡", "醒", "起", "等", "窗", "门", "桌", "椅", "房", "路",
         "风", "雨", "阳光", "手机", "杯", "水",
+        "身体", "目光", "眼神", "前倾", "探究", "微微", "点头", "摇头", "皱眉",
+        "叹气", "声音", "停顿", "沉了沉", "想了想",
     ];
+    if text.chars().count() > 4
+        && !text.chars().any(|c| c.is_ascii_alphanumeric())
+    {
+        return true;
+    }
     WORDS.iter().any(|word| text.contains(word))
 }
 
