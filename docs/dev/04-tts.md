@@ -229,3 +229,20 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 - 每段独立送 TTS 合成/播放，长句不会一次性生成，后段失真明显减少。
 
 实测应用内首音约 1.25 s（首块 0.31 s）。
+
+
+### 缺省女声（不使用用户参考音）
+
+Qwen3-TTS Base **无参考音时是随机说话人**（实测 f0 196/242/141 Hz，会出现男声），
+不能直接当稳定缺省音色。当前用一段 Qwen 自己生成的固定女声做参考：
+
+```text
+workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
+--ref-text "早上好，今天天气不错，适合出去走走。"
+```
+
+它不包含用户声音，音色固定；要真正的“无参考预设女声”，需要
+`Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`（3.08 GB，预设 speaker + 情绪），
+或退回 Matcha 内置女声。
+
+标点断句：首句逗号阈值 8 字、后续 12 字，句子标点优先；首句硬上限 30、后续 40。
