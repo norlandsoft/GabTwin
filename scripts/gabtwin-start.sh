@@ -131,13 +131,13 @@ if [[ "${GABTWIN_TTS:-breeze}" == "indextts" ]]; then
   fi
 elif [[ "${GABTWIN_TTS:-qwen3tts}" == "qwen3tts" ]]; then
   QWEN_TTS_DIR="$GABTWIN_MODELS_DIR/tts/qwen3-tts-1.7b-base-8bit"
-  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$QWEN_TTS_DIR" && -f "$GABTWIN_HOME/tts/qwen-ref-default-female.wav" ]]; then
+  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$QWEN_TTS_DIR" && -f "$GABTWIN_HOME/tts/gyy-ref.wav" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8800/health >/dev/null 2>&1; then
       echo "启动 Qwen3-TTS 1.7B sidecar…"
       nohup "$ROOT/.venv-mlx/bin/python" "$ROOT/scripts/qwen3_tts_sidecar.py" \
         --model "$QWEN_TTS_DIR" \
-        --ref "$GABTWIN_HOME/tts/qwen-ref-default-female.wav" \
-        --ref-text "早上好，今天天气不错，适合出去走走。" \
+        --ref "$GABTWIN_HOME/tts/gyy-ref.wav" \
+        --ref-text "思维方式的后遗症就是你你你会很珍惜当下这个东西。但是其实你走过来，你会发现每一刻都挺值得珍惜的。" \
         --port 8800 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/tts-sidecar.pid"
       for _ in $(seq 1 180); do

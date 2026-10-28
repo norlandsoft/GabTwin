@@ -246,3 +246,14 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 或退回 Matcha 内置女声。
 
 标点断句：首句逗号阈值 8 字、后续 12 字，句子标点优先；首句硬上限 30、后续 40。
+
+
+### 对话程序使用 gyy 参考音
+
+- 参考音：`workspace/tts/gyy-ref.wav`（`/opt/Workspace/gyy.mov` 提取的 8.85 s 真实语音）；
+- 参考文本：`workspace/tts/gyy-ref.txt`；
+- Qwen3-TTS 1.7B Base 本地克隆，GLM 不参与运行时；
+- 实测首音 1.49 s（首块 0.38 s）；
+- GLM 生成的 50 条 15 s 参考在 `workspace/dataset/glm/gyy/refs/`，可用于训练或对比；
+- 如果觉得真实 8.85 s 参考的底噪/停顿影响音色，可把 sidecar 的 `--ref` 换成
+  `refs/g001.wav`（GLM 干净版）和对应文本。
