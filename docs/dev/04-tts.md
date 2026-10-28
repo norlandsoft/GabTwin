@@ -197,3 +197,14 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
   首音从 4.18 s 降到 **3.09 s**；
 - `GABTWIN_TTS_STREAM=0` 可回退整句 WAV；
 - IndexTTS 等没有 `/tts_stream` 的引擎自动回退整句。
+
+
+## Qwen3-TTS 1.7B Base（默认，2026-10-28）
+
+- sidecar：`scripts/qwen3_tts_sidecar.py`，端口 8800，`/tts` + `/tts_stream`；
+- 模型：`models/tts/qwen3-tts-1.7b-base-8bit`（软链到 HF 缓存的
+  `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit` 快照）；
+- 克隆：`--ref` + `--ref-text` 用 `$GABTWIN_HOME/tts/index-ref.wav`（你的音色）；
+- 24 kHz，RTF 约 0.5；实测首块 0.26–0.9 s，应用内首音 **1.77 s**；
+- 切回 Breeze：`GABTWIN_TTS=breeze`；IndexTTS：`GABTWIN_TTS=indextts`。
+- 注意：Base 模型没有显式情绪指令；要情绪控制需要 CustomVoice（不克隆你的音色）。

@@ -231,14 +231,12 @@ impl Synth {
                 tts_model_dir().display().to_string(),
             ),
             Self::Remote(_) => {
-                let is_breeze = std::env::var("GABTWIN_TTS")
-                    .map(|value| value == "breeze")
-                    .unwrap_or(true);
+                let engine = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "qwen3tts".to_string());
                 (
-                    if is_breeze {
-                        "Breeze（本地）"
-                    } else {
-                        "IndexTTS（本地）"
+                    match engine.as_str() {
+                        "qwen3tts" => "Qwen3-TTS 1.7B（本地）",
+                        "breeze" => "Breeze（本地）",
+                        _ => "IndexTTS（本地）",
                     }
                     .to_string(),
                     std::env::var("GABTWIN_TTS_URL")
@@ -294,7 +292,7 @@ fn start_tts_worker(
 ) -> mpsc::Sender<TtsCommand> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "breeze".to_string());
+        let mode = std::env::var("GABTWIN_TTS").unwrap_or_else(|_| "qwen3tts".to_string());
         let mut synth = match mode.as_str() {
             "glm" => {
                 let key = std::env::var("ZHIPU_API_KEY")
@@ -323,7 +321,7 @@ fn start_tts_worker(
                     }
                 }
             }
-            "indextts" | "breeze" => std::env::var("GABTWIN_TTS_URL")
+            "indextts" | "breeze" | "qwen3tts" => std::env::var("GABTWIN_TTS_URL")
                 .ok()
                 .and_then(|url| RemoteTts::new(url).ok().map(Synth::Remote)),
             _ => None,
