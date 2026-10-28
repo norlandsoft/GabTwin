@@ -539,6 +539,9 @@ struct LlmState {
     dialog: Mutex<Dialog>,
     turn: AtomicU64,
     cancel: Mutex<Arc<AtomicBool>>,
+    /// 小停顿被 ASR 切成多段时，先把文本攒在这里再合并成一轮。
+    pending: Mutex<Option<String>>,
+    segment_seq: AtomicU64,
 }
 
 impl LlmState {
@@ -577,6 +580,8 @@ impl LlmState {
             dialog: Mutex::new(Dialog::new(system)),
             turn: AtomicU64::new(0),
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
+            pending: Mutex::new(None),
+            segment_seq: AtomicU64::new(0),
         }
     }
 }
@@ -750,7 +755,7 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
                         return;
                     }
                 }
-                start_llm_turn(&llm_app, text.clone());
+                queue_segment(&llm_app, text.clone());
             }
         };
 
@@ -781,7 +786,47 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
 }
 
 /// 一句用户话定稿后，发起一轮流式回复。新一轮会取消上一轮。
+fn queue_segment(app: &AppHandle, text: String) {
+    let Some(state) = app.try_state::<LlmState>() else {
+        start_llm_turn(app, text);
+        return;
+    };
+    let seq = state.segment_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    {
+        let mut pending = state.pending.lock().unwrap();
+        match pending.as_mut() {
+            Some(buffer) => buffer.push_str(&text),
+            None => *pending = Some(text),
+        }
+    }
+    let delay_ms = std::env::var("GABTWIN_SEGMENT_MERGE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(600);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        let Some(state) = app.try_state::<LlmState>() else {
+            return;
+        };
+        if state.segment_seq.load(Ordering::SeqCst) != seq {
+            return;
+        }
+        let text = state.pending.lock().unwrap().take();
+        if let Some(text) = text {
+            if !text.trim().is_empty() {
+                start_llm_turn(&app, text);
+            }
+        }
+    });
+}
+
 fn start_llm_turn(app: &AppHandle, text: String) {
+    // 新一轮开始：先取消上一轮，否则旧回复的 delta 会继续喂给 TTS，
+    // 两条回答在 splitter 里交错，听起来就语无伦次。
+    if let Some(previous) = app.try_state::<LlmState>() {
+        previous.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+    }
     if let Some(tts) = app.try_state::<TtsState>() {
         tts.begin_turn();
     }
@@ -811,15 +856,27 @@ fn start_llm_turn(app: &AppHandle, text: String) {
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let emit_target = app_handle.clone();
+        let cancel_for_feed = cancel.clone();
         let result = client.stream_chat(&messages, &cancel, |delta| {
             let _ = emit_target.emit(
                 "llm-delta",
                 serde_json::json!({ "turn_id": turn_id, "text": delta }),
             );
-            if let Some(tts) = emit_target.try_state::<TtsState>() {
-                tts.feed(delta);
+            if !cancel_for_feed.load(Ordering::SeqCst) {
+                if let Some(tts) = emit_target.try_state::<TtsState>() {
+                    tts.feed(delta);
+                }
             }
         });
+
+        // 如果这轮已经被新的一轮取代，结果直接丢弃，不再写对话/喂 TTS。
+        let current_turn = app_handle
+            .try_state::<LlmState>()
+            .map(|state| state.turn.load(Ordering::SeqCst))
+            .unwrap_or(0);
+        if current_turn != turn_id {
+            return;
+        }
 
         match result {
             Ok(r) if r.cancelled => {
@@ -910,6 +967,8 @@ fn ptt_press(app: AppHandle) {
         tts.stop();
         if let Some(llm) = app.try_state::<LlmState>() {
             llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+            llm.segment_seq.fetch_add(1, Ordering::SeqCst);
+            *llm.pending.lock().unwrap() = None;
         }
         log("PTT 按下：开麦并打断");
     }
@@ -927,6 +986,8 @@ fn ptt_release(app: AppHandle) {
 fn clear_memory(app: AppHandle) {
     if let Some(llm) = app.try_state::<LlmState>() {
         llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+        llm.segment_seq.fetch_add(1, Ordering::SeqCst);
+        *llm.pending.lock().unwrap() = None;
         *llm.dialog.lock().unwrap() = Dialog::new(llm.system.clone());
     }
     if let Some(tts) = app.try_state::<TtsState>() {
@@ -942,6 +1003,8 @@ fn interrupt(app: AppHandle) {
     }
     if let Some(llm) = app.try_state::<LlmState>() {
         llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+        llm.segment_seq.fetch_add(1, Ordering::SeqCst);
+        *llm.pending.lock().unwrap() = None;
     }
     log("手动打断：停止 TTS 并取消回复");
 }
