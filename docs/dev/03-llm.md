@@ -162,3 +162,11 @@ GABTWIN_LLM_MODEL=/opt/GabTwin/models/llm/qwen3.5-9b-abliterated-4bit
 
 启动脚本会把它设为默认并传给 `mlx_lm.server`；手动起 server 时，请求里的
 `model` 字段也必须是这个绝对路径。
+
+
+### 回复长度与截断
+
+- 单轮 LLM 回复上限默认 **512 tokens**（`GABTWIN_LLM_MAX_TOKENS`）；
+- 之前是 200，长段落最后 1–2 个字会被截掉；
+- 收到 `finish_reason=length` 时日志会写「LLM 回复达到 max_tokens，可能被截断」；
+- 校对调用也提高到 512，避免长 ASR 文本被截。

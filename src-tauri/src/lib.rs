@@ -1058,7 +1058,7 @@ fn start_corrected_turn(app: &AppHandle, text: String) {
     let app_handle = app.clone();
     let original = text;
     std::thread::spawn(move || {
-        let result = client.stream_chat_with(&messages, &cancel, 0.2, 180, |_| {});
+        let result = client.stream_chat_with(&messages, &cancel, 0.2, 512, |_| {});
         if cancel.load(Ordering::SeqCst) {
             return;
         }
@@ -1147,6 +1147,9 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 let _ = app_handle.emit("llm-cancelled", serde_json::json!({ "turn_id": turn_id }));
             }
             Ok(r) if !r.text.trim().is_empty() => {
+                if r.finish_reason.as_deref() == Some("length") {
+                    log("LLM 回复达到 max_tokens，可能被截断");
+                }
                 let reply = strip_stage_directions(&r.text);
                 if reply.is_empty() {
                     let _ = app_handle.emit(

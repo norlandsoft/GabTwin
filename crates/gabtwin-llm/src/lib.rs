@@ -62,7 +62,10 @@ impl LlmConfig {
             api_key,
             model: std::env::var("GABTWIN_LLM_MODEL")
                 .unwrap_or_else(|_| "deepseek-chat".to_string()),
-            max_tokens: 200,
+            max_tokens: std::env::var("GABTWIN_LLM_MAX_TOKENS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(512),
             temperature: 0.8,
         })
     }
@@ -76,6 +79,8 @@ pub struct StreamResult {
     pub first_token_ms: Option<u64>,
     /// 从发请求到流结束的毫秒数。
     pub total_ms: u64,
+    /// stop / length / ...
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -212,6 +217,11 @@ impl LlmClient {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
                 continue;
             };
+            if let Some(reason) = value["choices"][0]["finish_reason"].as_str() {
+                if !reason.is_empty() {
+                    result.finish_reason = Some(reason.to_string());
+                }
+            }
             if let Some(delta) = value["choices"][0]["delta"]["content"].as_str() {
                 if delta.is_empty() {
                     continue;
