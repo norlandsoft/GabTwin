@@ -143,7 +143,7 @@ impl TtsState {
         let generation = self.generation.load(Ordering::SeqCst);
         let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
             .map(|value| value != "0")
-            .unwrap_or(false);
+            .unwrap_or(true);
         if one_shot {
             let text = text.trim();
             if text.is_empty() {
@@ -500,6 +500,16 @@ fn start_tts_worker(
                             samples_all.extend_from_slice(samples);
                         }
                         let ms = samples.len() as u64 * 1000 / rate.max(1) as u64;
+                        // 单段也可能很长（one-shot）：按块背压，别让 10 秒播放环溢出。
+                        let played = first_push_at
+                            .map(|at| at.elapsed().as_millis() as u64)
+                            .unwrap_or(0);
+                        let backlog = queued_ms.saturating_sub(played);
+                        if backlog > backlog_limit {
+                            std::thread::sleep(Duration::from_millis(
+                                (backlog - backlog_limit).min(200),
+                            ));
+                        }
                         let audio = resample_linear(samples, rate, speaker.sample_rate);
                         queued_ms += ms;
                         if first_push_at.is_none() {
