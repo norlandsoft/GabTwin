@@ -295,6 +295,11 @@ impl Dialog {
     pub fn reset(&mut self) {
         self.history.clear();
     }
+
+    /// 热更新 system prompt，保留已有对话历史。
+    pub fn set_system(&mut self, system: impl Into<String>) {
+        self.system = system.into();
+    }
 }
 
 /// Qwen3.5/3.6 需要官方身份首行 + 关闭思考，才能稳定出正文。

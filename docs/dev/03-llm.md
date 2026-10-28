@@ -170,3 +170,12 @@ GABTWIN_LLM_MODEL=/opt/GabTwin/models/llm/qwen3.5-9b-abliterated-4bit
 - 之前是 200，长段落最后 1–2 个字会被截掉；
 - 收到 `finish_reason=length` 时日志会写「LLM 回复达到 max_tokens，可能被截断」；
 - 校对调用也提高到 512，避免长 ASR 文本被截。
+
+
+### 数字人人设（设置页）
+
+- 界面「设置」打开弹层，编辑数字人的系统提示词：背景、和用户的关系、说话风格；
+- 保存到 `workspace/persona.txt`，启动时加载；保存后**热更新**当前 `Dialog` 的 system，保留已有对话历史；
+- 系统会自动追加口语规则（中文、两三句、不用 Markdown、不念动作等），文本框里只写人设本身；
+- 「恢复默认」写回内置默认人设；
+- 文件不存在时使用默认值；空人设不允许保存。

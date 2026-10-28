@@ -305,6 +305,54 @@ if (!invoke) {
     live.innerHTML = "";
     hint.textContent = "记忆已清空，重新开始。";
   });
+  const settingsModal = $("settingsModal");
+  const personaInput = $("personaInput");
+  const personaStatus = $("personaStatus");
+  const setPersonaStatus = (text, isError = false) => {
+    if (!personaStatus) return;
+    personaStatus.textContent = text;
+    personaStatus.style.color = isError ? "#e07a7a" : "var(--muted)";
+  };
+  const closeSettings = () => settingsModal.classList.add("hidden");
+  const openSettings = () => {
+    if (!invoke) return;
+    setPersonaStatus("");
+    invoke("get_persona")
+      .then((text) => {
+        personaInput.value = text || "";
+        settingsModal.classList.remove("hidden");
+        personaInput.focus();
+      })
+      .catch((err) => setPersonaStatus(String(err), true));
+  };
+  $("settings").addEventListener("click", openSettings);
+  $("settingsClose").addEventListener("click", closeSettings);
+  settingsModal.addEventListener("click", (event) => {
+    if (event.target === settingsModal) closeSettings();
+  });
+  $("personaSave").addEventListener("click", async () => {
+    const text = personaInput.value.trim();
+    if (!text) {
+      setPersonaStatus("人设不能为空", true);
+      return;
+    }
+    try {
+      const saved = await invoke("set_persona", { text });
+      personaInput.value = saved;
+      setPersonaStatus("已保存，下一轮生效");
+    } catch (err) {
+      setPersonaStatus(String(err), true);
+    }
+  });
+  $("personaReset").addEventListener("click", async () => {
+    try {
+      const text = await invoke("reset_persona");
+      personaInput.value = text;
+      setPersonaStatus("已恢复默认，下一轮生效");
+    } catch (err) {
+      setPersonaStatus(String(err), true);
+    }
+  });
   let pttHeld = false;
   const isTyping = (el) =>
     !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -336,6 +384,10 @@ if (!invoke) {
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && invoke) {
+      if (!settingsModal.classList.contains("hidden")) {
+        closeSettings();
+        return;
+      }
       invoke("interrupt").catch(() => {});
     }
   });

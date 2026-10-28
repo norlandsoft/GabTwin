@@ -333,3 +333,82 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 10, 0.68);
+  backdrop-filter: blur(6px);
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.sheet {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #15181d;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sheet-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sheet-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+#personaInput {
+  width: 100%;
+  height: 280px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1216;
+  color: var(--text);
+  font: 13px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace;
+  outline: none;
+}
+
+#personaInput:focus {
+  border-color: var(--accent);
+}
+
+.sheet-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sheet-foot .dim {
+  margin-right: auto;
+  max-width: 55%;
+  white-space: normal;
+}

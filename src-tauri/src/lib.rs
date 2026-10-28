@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 带时间戳的诊断日志。写到 stderr，启动脚本会把它落进 app.log。
 fn log(message: impl AsRef<str>) {
@@ -606,9 +606,25 @@ fn is_tts_echo(text: &str, state: &TtsState) -> bool {
     inter / union > 0.45
 }
 
+const DEFAULT_PERSONA: &str = "你是 GabTwin，一个住在用户电脑里的数字伙伴，也是用户熟悉的老朋友。\n背景：你对科技、阅读、生活和日常琐事都感兴趣；你记得你们聊过的事情，但不会编造没有发生过的共同经历。\n关系：你和用户是平等、亲近的朋友，不是客服，也不是助手；你可以有不同意见，但不会说教。\n风格：中文口语，温和、好奇，偶尔有点幽默；一次说两三个短句，先接话再展开；不用书面腔，不堆砌形容词，不念动作。";
+
+fn persona_path() -> PathBuf {
+    gabtwin_home().join("persona.txt")
+}
+
+fn load_persona() -> String {
+    std::fs::read_to_string(persona_path())
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| DEFAULT_PERSONA.to_string())
+}
+
 struct LlmState {
     client: Option<LlmClient>,
-    system: String,
+    model: String,
+    persona: Mutex<String>,
+    system: Mutex<String>,
     dialog: Mutex<Dialog>,
     turn: AtomicU64,
     cancel: Mutex<Arc<AtomicBool>>,
@@ -640,9 +656,10 @@ impl LlmState {
                 None
             }
         };
-        let persona = "你是 GabTwin，一个温和、好奇、话不多的中文闲聊伙伴。";
+        let persona = load_persona();
+        log(format!("人设已加载：{} 字", persona.chars().count()));
         let model_hint = std::env::var("GABTWIN_LLM_MODEL").unwrap_or_default();
-        let system = system_prompt_for(persona, &model_hint);
+        let system = system_prompt_for(&persona, &model_hint);
         if let Some(client) = client.clone() {
             let system = system.clone();
             let correction = correction_system();
@@ -653,7 +670,9 @@ impl LlmState {
         }
         Self {
             client,
-            system: system.clone(),
+            model: model_hint,
+            persona: Mutex::new(persona),
+            system: Mutex::new(system.clone()),
             dialog: Mutex::new(Dialog::new(system)),
             turn: AtomicU64::new(0),
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
@@ -1293,13 +1312,46 @@ fn ptt_release(app: AppHandle) {
 }
 
 #[tauri::command]
+fn get_persona(state: State<'_, LlmState>) -> String {
+    state.persona.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_persona(app: AppHandle, text: String) -> Result<String, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("人设不能为空".to_string());
+    }
+    let path = persona_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| format!("创建目录失败：{err}"))?;
+    }
+    std::fs::write(&path, &text).map_err(|err| format!("保存人设失败：{err}"))?;
+    if let Some(state) = app.try_state::<LlmState>() {
+        let model = state.model.clone();
+        let system = system_prompt_for(&text, &model);
+        *state.persona.lock().unwrap() = text.clone();
+        *state.system.lock().unwrap() = system.clone();
+        state.dialog.lock().unwrap().set_system(system);
+    }
+    log(format!("人设已更新：{} 字", text.chars().count()));
+    Ok(text)
+}
+
+#[tauri::command]
+fn reset_persona(app: AppHandle) -> Result<String, String> {
+    set_persona(app, DEFAULT_PERSONA.to_string())
+}
+
+#[tauri::command]
 fn clear_memory(app: AppHandle) {
     if let Some(llm) = app.try_state::<LlmState>() {
         llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
         llm.segment_seq.fetch_add(1, Ordering::SeqCst);
         *llm.pending.lock().unwrap() = None;
         llm.held.lock().unwrap().clear();
-        *llm.dialog.lock().unwrap() = Dialog::new(llm.system.clone());
+        let system = llm.system.lock().unwrap().clone();
+        *llm.dialog.lock().unwrap() = Dialog::new(system);
     }
     if let Some(tts) = app.try_state::<TtsState>() {
         tts.stop();
@@ -1362,6 +1414,9 @@ pub fn run() {
             tts_info,
             interrupt,
             clear_memory,
+            get_persona,
+            set_persona,
+            reset_persona,
             ptt_press,
             ptt_release,
             llm_status

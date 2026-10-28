@@ -41,6 +41,7 @@
             <button id="stop" disabled>停止</button>
             <button id="sample" class="ghost">示例音频</button>
             <button id="clearMemory" class="ghost">清空记忆</button>
+            <button id="settings" class="ghost">设置</button>
           </div>
         </div>
         <div class="foot">
@@ -50,6 +51,21 @@
           <span id="ptt" class="dim">按住空格说话</span>
         </div>
       </footer>
+    </div>
+    <div class="modal hidden" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="sheet">
+        <div class="sheet-head">
+          <h2 id="settingsTitle">数字人人设</h2>
+          <button id="settingsClose" class="ghost">关闭</button>
+        </div>
+        <p class="sheet-hint">定义人物背景、和你的关系、说话风格。系统会自动追加“中文口语、不用 Markdown、不念动作”等规则。</p>
+        <textarea id="personaInput" spellcheck="false" placeholder="例如：你是……；背景：……；关系：……；风格：……"></textarea>
+        <div class="sheet-foot">
+          <span id="personaStatus" class="dim"></span>
+          <button id="personaReset" class="ghost">恢复默认</button>
+          <button id="personaSave" class="primary">保存</button>
+        </div>
+      </div>
     </div>
     <script src="main.js"></script>
   </body>
