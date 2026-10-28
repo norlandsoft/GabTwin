@@ -535,6 +535,7 @@ fn is_tts_echo(text: &str, state: &TtsState) -> bool {
 
 struct LlmState {
     client: Option<LlmClient>,
+    system: String,
     dialog: Mutex<Dialog>,
     turn: AtomicU64,
     cancel: Mutex<Arc<AtomicBool>>,
@@ -572,6 +573,7 @@ impl LlmState {
         }
         Self {
             client,
+            system: system.clone(),
             dialog: Mutex::new(Dialog::new(system)),
             turn: AtomicU64::new(0),
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
@@ -922,6 +924,18 @@ fn ptt_release(app: AppHandle) {
 }
 
 #[tauri::command]
+fn clear_memory(app: AppHandle) {
+    if let Some(llm) = app.try_state::<LlmState>() {
+        llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+        *llm.dialog.lock().unwrap() = Dialog::new(llm.system.clone());
+    }
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.stop();
+    }
+    log("历史记忆已清空");
+}
+
+#[tauri::command]
 fn interrupt(app: AppHandle) {
     if let Some(tts) = app.try_state::<TtsState>() {
         tts.stop();
@@ -973,6 +987,7 @@ pub fn run() {
             app_info,
             tts_info,
             interrupt,
+            clear_memory,
             ptt_press,
             ptt_release,
             llm_status

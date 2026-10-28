@@ -299,6 +299,12 @@ if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
   listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  $("clearMemory").addEventListener("click", () => {
+    if (invoke) invoke("clear_memory").catch(() => {});
+    conversation.innerHTML = "";
+    live.innerHTML = "";
+    hint.textContent = "记忆已清空，重新开始。";
+  });
   let pttHeld = false;
   const isTyping = (el) =>
     !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
