@@ -131,6 +131,26 @@ impl TtsState {
         }
     }
 
+    /// 按 LLM 的最终完整结果一次性送 TTS（默认路径）。
+    fn speak(&self, text: &str) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        self.splitter.lock().unwrap().reset();
+        let clauses = self.splitter.lock().unwrap().push(text);
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            for clause in clauses {
+                let _ = tx.send(TtsCommand::Clause {
+                    generation,
+                    text: clause,
+                });
+            }
+            let last = self.splitter.lock().unwrap().flush();
+            if let Some(text) = last {
+                let _ = tx.send(TtsCommand::Clause { generation, text });
+            }
+            let _ = tx.send(TtsCommand::Flush);
+        }
+    }
+
     fn flush(&self) {
         let generation = self.generation.load(Ordering::SeqCst);
         let last = self.splitter.lock().unwrap().flush();
@@ -822,6 +842,9 @@ fn queue_segment(app: &AppHandle, text: String) {
 }
 
 fn start_llm_turn(app: &AppHandle, text: String) {
+    let final_tts = std::env::var("GABTWIN_TTS_FINAL")
+        .map(|value| value != "0")
+        .unwrap_or(true);
     // 新一轮开始：先取消上一轮，否则旧回复的 delta 会继续喂给 TTS，
     // 两条回答在 splitter 里交错，听起来就语无伦次。
     if let Some(previous) = app.try_state::<LlmState>() {
@@ -862,7 +885,7 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 "llm-delta",
                 serde_json::json!({ "turn_id": turn_id, "text": delta }),
             );
-            if !cancel_for_feed.load(Ordering::SeqCst) {
+            if !final_tts && !cancel_for_feed.load(Ordering::SeqCst) {
                 if let Some(tts) = emit_target.try_state::<TtsState>() {
                     tts.feed(delta);
                 }
@@ -890,7 +913,11 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                     state.dialog.lock().unwrap().push_assistant(r.text.clone());
                 }
                 if let Some(tts) = app_handle.try_state::<TtsState>() {
-                    tts.flush();
+                    if final_tts {
+                        tts.speak(&r.text);
+                    } else {
+                        tts.flush();
+                    }
                 }
                 let _ = app_handle.emit(
                     "llm-done",

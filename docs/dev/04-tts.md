@@ -167,3 +167,12 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 - 回 IndexTTS：`GABTWIN_TTS=indextts`；回本地 Matcha/ZipVoice：`GABTWIN_TTS=local`；
 - 实测首音约 4.2 s（IndexTTS 约 8 s），后续每句仍受 Breeze RTF 限制；
 - **许可证：Breezeblue 研究/非商用**，商用需单独授权。
+
+
+## 按 LLM 最终结果合成（默认）
+
+`GABTWIN_TTS_FINAL=1`（默认）：等 LLM 完整返回后，用最终文本一次性送 TTS。
+这样念出来的内容与 LLM 的最终回答严格一致，不会把中途分片或旧轮次混进来；
+代价是首音要等 LLM 结束（本地 9B 通常 0.5–2 s）。
+
+`GABTWIN_TTS_FINAL=0` 恢复边收 delta 边合成，首音更早，但以流式文本为准。
