@@ -19,13 +19,28 @@ REF = None
 REF_TEXT = ""
 SAMPLE_RATE = 24000
 LOCK = threading.Lock()
+# 新请求到来时递增；正在生成旧请求的线程在下一个 chunk 处退出。
+REQUEST_ID = 0
 
 
 def synth(text: str) -> bytes:
+    global REQUEST_ID
+    REQUEST_ID += 1
+    my_id = REQUEST_ID
     with LOCK:
         chunks = []
         rate = SAMPLE_RATE
-        for result in MODEL.generate(text=text, ref_audio=REF, ref_text=REF_TEXT):
+        # stream=True 让旧请求能在 chunk 之间被新请求打断，而不是一直占着模型。
+        for result in MODEL.generate(
+            text=text,
+            ref_audio=REF,
+            ref_text=REF_TEXT,
+            stream=True,
+            streaming_interval=0.5,
+        ):
+            if my_id != REQUEST_ID:
+                print("[tts] cancelled by newer request", flush=True)
+                break
             chunks.append(np.array(result.audio))
             rate = getattr(result, "sample_rate", rate)
         audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)

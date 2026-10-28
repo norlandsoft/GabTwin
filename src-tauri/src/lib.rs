@@ -38,7 +38,7 @@ fn install_signal_logging() {
 enum TtsCommand {
     Clause { generation: u64, text: String },
     Stop,
-    Flush,
+    Flush { generation: u64 },
 }
 
 struct TtsState {
@@ -147,7 +147,7 @@ impl TtsState {
             if let Some(text) = last {
                 let _ = tx.send(TtsCommand::Clause { generation, text });
             }
-            let _ = tx.send(TtsCommand::Flush);
+            let _ = tx.send(TtsCommand::Flush { generation });
         }
     }
 
@@ -158,7 +158,7 @@ impl TtsState {
             if let Some(text) = last {
                 let _ = tx.send(TtsCommand::Clause { generation, text });
             }
-            let _ = tx.send(TtsCommand::Flush);
+            let _ = tx.send(TtsCommand::Flush { generation });
         }
     }
 }
@@ -372,7 +372,10 @@ fn start_tts_worker(
                     mute.store(false, Ordering::SeqCst);
                     speaking.store(false, Ordering::SeqCst);
                 }
-                TtsCommand::Flush => {
+                TtsCommand::Flush { generation: g } => {
+                    if g != generation.load(Ordering::SeqCst) {
+                        continue;
+                    }
                     *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
                     reply_text.clear();
                     // 合成期间已经在播的部分要扣掉，否则声音结束后还会多静音一段。
@@ -417,6 +420,10 @@ fn start_tts_worker(
                         }
                     };
                     if g != generation.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    if g != generation.load(Ordering::SeqCst) {
+                        log(format!("TTS 结果已过期，丢弃：{text}"));
                         continue;
                     }
                     let ms = samples.len() as u64 * 1000 / tts_rate.max(1) as u64;

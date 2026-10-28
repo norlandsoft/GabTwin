@@ -176,3 +176,14 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 代价是首音要等 LLM 结束（本地 9B 通常 0.5–2 s）。
 
 `GABTWIN_TTS_FINAL=0` 恢复边收 delta 边合成，首音更早，但以流式文本为准。
+
+
+### 取消过期请求
+
+- Breeze sidecar 用 `stream=True` + 全局 `REQUEST_ID`：新请求到来时，旧请求在下一个
+  chunk 处退出，不再一直占着模型；
+- TTS worker 在合成返回后**再次检查 generation**，旧轮次的音频直接丢弃；
+- `Flush` 也带 generation，旧轮次的 flush 不会恢复麦克风/干扰新一轮。
+
+之前首句 4–7 s 的主因不是 Breeze 本身（实测 RTF 0.6），而是旧请求占着 sidecar；
+取消后首句合成约 2.8 s。
