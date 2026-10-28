@@ -272,10 +272,11 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 
 ### 语速与标点停顿### 语速与标点停顿
 
-- `GABTWIN_TTS_SPEED=0.85`（比 1.0 慢 15%）；
-- 标点停顿：只扩展 ≥300 ms 的真实静音，每个追加 **300 ms**
+- `GABTWIN_TTS_SPEED=0.8`（比 1.0 慢 20%）；
+- 标点停顿：只扩展 ≥300 ms 的真实静音，每个追加 **500 ms**
   （`GABTWIN_TTS_PAUSE_MIN` / `GABTWIN_TTS_PAUSE_EXTRA`）；
-- 段间 250 ms + 标点 300 ms，整体节奏比之前舒缓。
+- 段间 350 ms + 标点 500 ms，整体节奏更舒缓。
+- 每段首尾 40 ms 淡入 / 60 ms 淡出；每个标点停顿后 30 ms 缓入。
 
 ### 标点停顿（默认开）
 

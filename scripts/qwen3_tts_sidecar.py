@@ -17,10 +17,10 @@ MODEL = None
 REF = None
 REF_TEXT = ""
 SAMPLE_RATE = 24000
-SPEED = 0.85
+SPEED = 0.8
 PAUSE = True
 PAUSE_MIN_MS = 300
-PAUSE_EXTRA_MS = 300
+PAUSE_EXTRA_MS = 500
 LOCK = threading.Lock()
 SESSION_REF_PATH = "/tmp/gabtwin-session-ref.wav"
 SESSION_REF = None
@@ -67,7 +67,7 @@ def pcm_bytes(audio: np.ndarray) -> bytes:
 class FadeStream:
     """给每段音频首尾做短线淡入/淡出，消除拼接爆音。"""
 
-    def __init__(self, sample_rate: int, fade_in_ms: int = 10, fade_out_ms: int = 20):
+    def __init__(self, sample_rate: int, fade_in_ms: int = 40, fade_out_ms: int = 60):
         self.in_n = max(1, int(sample_rate * fade_in_ms / 1000))
         self.out_n = max(1, int(sample_rate * fade_out_ms / 1000))
         self.in_ramp = np.linspace(0.0, 1.0, self.in_n, dtype=np.float32)
@@ -99,9 +99,9 @@ class FadeStream:
 
 def fade_edges(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     audio = np.asarray(audio, dtype=np.float32).copy()
-    n = min(len(audio), max(1, int(sample_rate * 0.01)))
+    n = min(len(audio), max(1, int(sample_rate * 0.04)))
     audio[:n] *= np.linspace(0.0, 1.0, n, dtype=np.float32)
-    n = min(len(audio), max(1, int(sample_rate * 0.02)))
+    n = min(len(audio), max(1, int(sample_rate * 0.06)))
     audio[-n:] *= np.linspace(1.0, 0.0, n, dtype=np.float32)
     return audio
 
@@ -116,6 +116,8 @@ class PauseExtender:
         self.buf = np.zeros(0, dtype=np.float32)
         self.silence: list[np.ndarray] = []
         self.started = False
+        self.resume_total = max(1, int(sample_rate * 0.03))
+        self.resume_left = 0
 
     def push(self, audio: np.ndarray) -> np.ndarray:
         self.buf = np.concatenate([self.buf, np.asarray(audio, dtype=np.float32)])
@@ -136,7 +138,15 @@ class PauseExtender:
                     out.append(run)
                     if len(run) >= self.min_samples:
                         out.append(self.extra)
+                        self.resume_left = self.resume_total
                 self.started = True
+                if self.resume_left > 0:
+                    n = min(len(frame), self.resume_left)
+                    start = self.resume_total - self.resume_left
+                    ramp = (start + np.arange(n, dtype=np.float32)) / self.resume_total
+                    frame = frame.copy()
+                    frame[:n] *= ramp
+                    self.resume_left -= n
                 out.append(frame)
         return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
 

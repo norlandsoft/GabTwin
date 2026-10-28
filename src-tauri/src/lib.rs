@@ -559,7 +559,7 @@ fn start_tts_worker(
                     let gap_ms = std::env::var("GABTWIN_TTS_SEGMENT_GAP_MS")
                         .ok()
                         .and_then(|value| value.parse::<u64>().ok())
-                        .unwrap_or(250);
+                        .unwrap_or(350);
                     if gap_ms > 0 {
                         let gap = vec![0.0f32; (speaker.sample_rate as u64 * gap_ms / 1000) as usize];
                         speaker.push(gap);
