@@ -208,3 +208,13 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 - 24 kHz，RTF 约 0.5；实测首块 0.26–0.9 s，应用内首音 **1.77 s**；
 - 切回 Breeze：`GABTWIN_TTS=breeze`；IndexTTS：`GABTWIN_TTS=indextts`。
 - 注意：Base 模型没有显式情绪指令；要情绪控制需要 CustomVoice（不克隆你的音色）。
+
+
+### Qwen3-TTS 的参考音与长句
+
+- Base 模型的韵律跟随参考音：默认用 GLM 语料的 **高兴** 片段
+  `workspace/tts/qwen-ref-lively.wav`（c0041）做参考，避免中性参考导致的“死气沉沉”；
+- 想换情绪就换参考音（c0042/c0043 高兴、c0057 惊讶、c0063+ 悲伤等），并同步
+  `--ref-text`；Base 没有 `instruct` 情绪控制；
+- **长文本**：整段 100 字一次生成需 22.2 s（RTF 0.81），后半段容易劣化；
+  应用按 **40 字 + 逗号优先** 切分后每段 RTF 0.42–0.53，明显更稳。
