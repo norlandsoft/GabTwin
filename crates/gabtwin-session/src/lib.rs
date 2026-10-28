@@ -417,7 +417,7 @@ where
             was_ptt_off = false;
         } else if ptt_was_on {
             if ptt_release_tail.is_none() {
-                ptt_release_tail = Some(Instant::now() + Duration::from_millis(800));
+                ptt_release_tail = Some(Instant::now() + Duration::from_millis(ptt_tail_ms));
             }
             let tail = ptt_release_tail
                 .map(|at| at > Instant::now())
@@ -508,7 +508,6 @@ where
                         last_partial = text.clone();
                         stats.on_update(AsrUpdate::Partial(text), &mut sink);
                     }
-                    other => stats.on_update(other, &mut sink),
                 }
             }
         }
