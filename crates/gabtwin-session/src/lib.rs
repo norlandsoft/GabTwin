@@ -124,6 +124,8 @@ pub struct SessionConfig {
     pub min_segment_rms: f32,
     /// 一段话至少这么长（毫秒）。
     pub min_segment_ms: u32,
+    /// Push-to-talk：只有它为 true 时才把麦克风送进识别器。
+    pub ptt: Option<Arc<AtomicBool>>,
 }
 
 impl SessionConfig {
@@ -139,6 +141,7 @@ impl SessionConfig {
             aec_render: None,
             min_segment_rms: 0.008,
             min_segment_ms: 250,
+            ptt: None,
         }
     }
 }
@@ -375,6 +378,9 @@ where
     let mut stats = Stats::new(sr);
     let mut level_at = Instant::now();
     let mut was_muted = false;
+    let mut was_ptt_off = false;
+    let mut ptt_was_on = false;
+    let mut ptt_release_tail: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let got = recv_chunk(
@@ -387,6 +393,48 @@ where
             continue;
         }
         pending.extend_from_slice(&scratch[..got]);
+
+        // Push-to-talk：没按住空格就丢弃；松开后再留 800 ms 尾巴让端点触发。
+        let ptt_active = cfg
+            .ptt
+            .as_ref()
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(true);
+        if ptt_active {
+            ptt_was_on = true;
+            if was_ptt_off || ptt_release_tail.is_some() {
+                asr.reset();
+                segment_audio.clear();
+            }
+            ptt_release_tail = None;
+            was_ptt_off = false;
+        } else if ptt_was_on {
+            if ptt_release_tail.is_none() {
+                ptt_release_tail = Some(Instant::now() + Duration::from_millis(800));
+            }
+            let tail = ptt_release_tail
+                .map(|at| at > Instant::now())
+                .unwrap_or(false);
+            if !tail {
+                ptt_was_on = false;
+                ptt_release_tail = None;
+                pending.clear();
+                segment_audio.clear();
+                asr.reset();
+                was_ptt_off = true;
+                sink(SessionEvent::Muted { muted: true });
+                continue;
+            }
+        } else {
+            pending.clear();
+            segment_audio.clear();
+            if !was_ptt_off {
+                asr.reset();
+                was_ptt_off = true;
+                sink(SessionEvent::Muted { muted: true });
+            }
+            continue;
+        }
 
         // TTS 正在播放：丢弃音频，并清掉识别器里的残留假设。
         let muted = cfg

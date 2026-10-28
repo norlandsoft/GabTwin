@@ -60,6 +60,8 @@ struct TtsState {
     render: RenderTap,
     /// 最近一次麦克风 RMS，用于插话门限。
     level: Arc<Mutex<f32>>,
+    /// Push-to-talk：按住空格才开麦。
+    ptt: Arc<AtomicBool>,
 }
 
 impl TtsState {
@@ -73,6 +75,7 @@ impl TtsState {
         let last_reply = Arc::new(Mutex::new((String::new(), None)));
         let render = RenderTap::new();
         let level = Arc::new(Mutex::new(0.0));
+        let ptt = Arc::new(AtomicBool::new(false));
         let tx = start_tts_worker(
             app,
             generation.clone(),
@@ -101,6 +104,7 @@ impl TtsState {
             last_reply,
             render,
             level,
+            ptt,
         }
     }
 
@@ -633,13 +637,19 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
     let aec_enabled = std::env::var("GABTWIN_AEC")
         .map(|value| value != "0")
         .unwrap_or(true);
+    let ptt_enabled = std::env::var("GABTWIN_PTT")
+        .map(|value| value != "0")
+        .unwrap_or(true);
     if let Some(tts) = app.try_state::<TtsState>() {
+        if ptt_enabled {
+            cfg.ptt = Some(tts.ptt.clone());
+            log("麦克风策略：Push-to-Talk（按住空格说话）");
+        }
         if aec_enabled {
             tts.render.clear();
             cfg.aec_render = Some(tts.render.clone());
-            log("麦克风策略：AEC3 回声消除（播放时开麦，可插话）");
-        } else {
-            // 不开 AEC 时：默认播放时闭麦；只有显式 GABTWIN_BARGE_IN=1 且耳机才开麦。
+        }
+        if !ptt_enabled && !aec_enabled {
             let barge_in = std::env::var("GABTWIN_BARGE_IN")
                 .map(|value| value == "1")
                 .unwrap_or(false);
@@ -892,6 +902,26 @@ fn replay_sample(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ptt_press(app: AppHandle) {
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.ptt.store(true, Ordering::SeqCst);
+        tts.stop();
+        if let Some(llm) = app.try_state::<LlmState>() {
+            llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
+        }
+        log("PTT 按下：开麦并打断");
+    }
+}
+
+#[tauri::command]
+fn ptt_release(app: AppHandle) {
+    if let Some(tts) = app.try_state::<TtsState>() {
+        tts.ptt.store(false, Ordering::SeqCst);
+        log("PTT 松开");
+    }
+}
+
+#[tauri::command]
 fn interrupt(app: AppHandle) {
     if let Some(tts) = app.try_state::<TtsState>() {
         tts.stop();
@@ -943,6 +973,8 @@ pub fn run() {
             app_info,
             tts_info,
             interrupt,
+            ptt_press,
+            ptt_release,
             llm_status
         ])
         .setup(|app| {

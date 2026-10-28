@@ -299,6 +299,35 @@ if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
   listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  let pttHeld = false;
+  const isTyping = (el) =>
+    !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  const setPttLabel = (text) => {
+    const el = $("ptt");
+    if (el) el.textContent = text;
+  };
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.repeat || isTyping(document.activeElement)) return;
+    e.preventDefault();
+    if (!invoke || pttHeld) return;
+    pttHeld = true;
+    setPttLabel("正在听…松开空格发送");
+    invoke("ptt_press").catch(() => {});
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.code !== "Space" || isTyping(document.activeElement)) return;
+    e.preventDefault();
+    if (!invoke || !pttHeld) return;
+    pttHeld = false;
+    setPttLabel("按住空格说话");
+    invoke("ptt_release").catch(() => {});
+  });
+  window.addEventListener("blur", () => {
+    if (!pttHeld || !invoke) return;
+    pttHeld = false;
+    setPttLabel("按住空格说话");
+    invoke("ptt_release").catch(() => {});
+  });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && invoke) {
       invoke("interrupt").catch(() => {});
