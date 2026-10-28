@@ -257,3 +257,14 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 - GLM 生成的 50 条 15 s 参考在 `workspace/dataset/glm/gyy/refs/`，可用于训练或对比；
 - 如果觉得真实 8.85 s 参考的底噪/停顿影响音色，可把 sidecar 的 `--ref` 换成
   `refs/g001.wav`（GLM 干净版）和对应文本。
+
+
+### 整段回答一次生成（默认）
+
+`GABTWIN_TTS_ONE_SHOT=1`（默认）：`TtsState::speak` 不再按标点切分，而是把 LLM 的
+最终整段回答作为一个 Clause 交给 Qwen3-TTS，sidecar 内部流式生成，应用边收边播。
+
+- 一次回答只有一次采样，语调/语气/音色/音量连续，听起来像一次生成；
+- 实测首音 0.91 s（首块 0.30 s）；日志里只有一个 `TTS 句`、只保存一个录音；
+- 代价：整段越长，模型后段稳定性越差；如果长回答出现劣化，设
+  `GABTWIN_TTS_ONE_SHOT=0` 回到标点分段（一致性会下降）。

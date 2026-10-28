@@ -134,6 +134,23 @@ impl TtsState {
     /// 按 LLM 的最终完整结果一次性送 TTS（默认路径）。
     fn speak(&self, text: &str) {
         let generation = self.generation.load(Ordering::SeqCst);
+        let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
+            .map(|value| value != "0")
+            .unwrap_or(true);
+        if one_shot {
+            let text = text.trim();
+            if text.is_empty() {
+                return;
+            }
+            if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+                let _ = tx.send(TtsCommand::Clause {
+                    generation,
+                    text: text.to_string(),
+                });
+                let _ = tx.send(TtsCommand::Flush { generation });
+            }
+            return;
+        }
         self.splitter.lock().unwrap().reset();
         let clauses = self.splitter.lock().unwrap().push(text);
         if let Some(tx) = self.tx.lock().unwrap().as_ref() {
