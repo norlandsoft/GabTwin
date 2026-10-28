@@ -94,7 +94,7 @@ impl TtsState {
                 std::env::var("GABTWIN_TTS_FIRST_CAP")
                     .ok()
                     .and_then(|value| value.parse().ok())
-                    .unwrap_or(20),
+                    .unwrap_or(30),
             )),
             turn_started,
             mute,

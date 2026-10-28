@@ -571,7 +571,7 @@ impl ClauseSplitter {
             buffer: String::new(),
             pending: String::new(),
             first: true,
-            first_cap: 20,
+            first_cap: 30,
         }
     }
 
@@ -660,7 +660,6 @@ fn find_split(text: &str, first: bool, first_cap: usize) -> Option<usize> {
 
     let mut chars = 0usize;
     let mut depth = 0i32;
-    let mut comma: Option<usize> = None;
     let mut sentence: Option<usize> = None;
     let mut hard: Option<usize> = None;
 
@@ -679,9 +678,12 @@ fn find_split(text: &str, first: bool, first_cap: usize) -> Option<usize> {
             sentence = Some(end);
             break;
         }
-        // 逗号取范围内最后一个，切得尽量靠后。
-        if matches!(c, '，' | ',' | '、' | '：' | ':') && chars >= comma_min {
-            comma = Some(end);
+        // 标点级断句：逗号够长、且不在引号内，就直接切。
+        if depth == 0
+            && matches!(c, '，' | ',' | '、' | '：' | ':')
+            && chars >= comma_min
+        {
+            return Some(end);
         }
         if chars >= hard_max {
             if depth == 0 {
@@ -711,10 +713,7 @@ fn find_split(text: &str, first: bool, first_cap: usize) -> Option<usize> {
     if sentence.is_some() {
         return sentence;
     }
-    if hard.is_some() {
-        return comma.or(hard);
-    }
-    None
+    hard
 }
 
 #[cfg(test)]
