@@ -187,3 +187,13 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 
 之前首句 4–7 s 的主因不是 Breeze 本身（实测 RTF 0.6），而是旧请求占着 sidecar；
 取消后首句合成约 2.8 s。
+
+
+### 流式 PCM（默认）
+
+- Breeze sidecar 的 `/tts_stream` 用 HTTP/1.1 chunked 边生成边推 s16le PCM（24 kHz）；
+- 应用 `RemoteTts::stream_pcm` 边读边重采样到扬声器，首块不再等整句；
+- 实测：sidecar 首块 0.35 s（长句），应用内首句首块约 1.9 s，
+  首音从 4.18 s 降到 **3.09 s**；
+- `GABTWIN_TTS_STREAM=0` 可回退整句 WAV；
+- IndexTTS 等没有 `/tts_stream` 的引擎自动回退整句。

@@ -50,6 +50,8 @@ def synth(text: str) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *args):  # 安静
         pass
 
@@ -60,6 +62,50 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _stream_tts(self):
+        global REQUEST_ID
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            text = (payload.get("text") or "").strip()
+            if not text:
+                self._send(400, b"empty text", "text/plain")
+                return
+            REQUEST_ID += 1
+            my_id = REQUEST_ID
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/L16; rate=24000")
+            self.send_header("X-Sample-Rate", "24000")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            with LOCK:
+                for result in MODEL.generate(
+                    text=text,
+                    ref_audio=REF,
+                    ref_text=REF_TEXT,
+                    stream=True,
+                    streaming_interval=0.25,
+                ):
+                    if my_id != REQUEST_ID:
+                        print("[tts] stream cancelled by newer request", flush=True)
+                        break
+                    audio = np.array(result.audio, dtype=np.float32)
+                    pcm = (np.clip(audio * 2.2, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                    if pcm:
+                        self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
+                        self.wfile.write(pcm)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as error:  # noqa: BLE001
+            try:
+                self._send(500, str(error).encode("utf-8", "replace"), "text/plain")
+            except Exception:
+                pass
+
     def do_GET(self):
         if self.path == "/health":
             self._send(200, b"ok", "text/plain")
@@ -67,6 +113,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        if self.path == "/tts_stream":
+            self._stream_tts()
+            return
         if self.path != "/tts":
             self._send(404, b"not found", "text/plain")
             return

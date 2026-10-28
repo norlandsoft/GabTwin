@@ -201,6 +201,29 @@ impl Synth {
         }
     }
 
+    fn stream<F>(&self, text: &str, on_chunk: &mut F) -> anyhow::Result<()>
+    where
+        F: FnMut(&[f32], u32),
+    {
+        if let Self::Remote(remote) = self {
+            if std::env::var("GABTWIN_TTS_STREAM")
+                .map(|value| value != "0")
+                .unwrap_or(true)
+            {
+                match remote.stream_pcm(text, on_chunk) {
+                    Ok(()) => return Ok(()),
+                    Err(err) => log(format!("TTS 流式失败，回退整句：{err:#}")),
+                }
+            }
+            let (samples, rate) = remote.synthesize(text)?;
+            on_chunk(&samples, rate);
+            return Ok(());
+        }
+        let (samples, rate) = self.synthesize(text)?;
+        on_chunk(&samples, rate);
+        Ok(())
+    }
+
     fn label(&self) -> (String, String) {
         match self {
             Self::Local(tts) => (
@@ -408,26 +431,70 @@ fn start_tts_worker(
                     }
                     log(format!("TTS 句：{text}"));
                     let tick = Instant::now();
-                    let (samples, tts_rate) = match synth.synthesize(&text) {
-                        Ok(pair) => pair,
-                        Err(err) => {
-                            log(format!("TTS 合成失败：{err:#}"));
-                            let _ = app.emit(
-                                "tts-error",
-                                serde_json::json!({ "message": format!("{err:#}") }),
-                            );
-                            continue;
+                    if !started {
+                        reply_text.clear();
+                    }
+                    reply_text.push_str(&text);
+                    *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
+                    let first_clause = !started;
+                    let mut first_chunk = true;
+                    let mut chunk_rate = 0u32;
+                    let mut samples_all: Vec<f32> = Vec::new();
+                    let result = synth.stream(&text, &mut |samples, rate| {
+                        if g != generation.load(Ordering::SeqCst) {
+                            return;
                         }
-                    };
-                    if g != generation.load(Ordering::SeqCst) {
+                        chunk_rate = rate;
+                        if save_tts {
+                            samples_all.extend_from_slice(samples);
+                        }
+                        let ms = samples.len() as u64 * 1000 / rate.max(1) as u64;
+                        let audio = resample_linear(samples, rate, speaker.sample_rate);
+                        queued_ms += ms;
+                        if first_push_at.is_none() {
+                            first_push_at = Some(Instant::now());
+                        }
+                        speaking.store(true, Ordering::SeqCst);
+                        if !mute.swap(true, Ordering::SeqCst) {
+                            log("TTS 播放：屏蔽麦克风");
+                        }
+                        speaker.push(audio);
+                        if first_chunk {
+                            first_chunk = false;
+                            started = true;
+                            if first_clause {
+                                let first_audio_ms = turn_started
+                                    .lock()
+                                    .ok()
+                                    .and_then(|value| *value)
+                                    .map(|at| at.elapsed().as_millis() as u64);
+                                log(format!(
+                                    "TTS 首音 {:?} ms（首句首块 {} ms）",
+                                    first_audio_ms,
+                                    tick.elapsed().as_millis()
+                                ));
+                                let _ = app.emit(
+                                    "tts-start",
+                                    serde_json::json!({
+                                        "first_audio_ms": first_audio_ms,
+                                        "clause_ms": tick.elapsed().as_millis() as u64,
+                                    }),
+                                );
+                            }
+                        }
+                    });
+                    if let Err(err) = result {
+                        log(format!("TTS 合成失败：{err:#}"));
+                        let _ = app.emit(
+                            "tts-error",
+                            serde_json::json!({ "message": format!("{err:#}") }),
+                        );
                         continue;
                     }
                     if g != generation.load(Ordering::SeqCst) {
-                        log(format!("TTS 结果已过期，丢弃：{text}"));
                         continue;
                     }
-                    let ms = samples.len() as u64 * 1000 / tts_rate.max(1) as u64;
-                    if save_tts {
+                    if save_tts && !samples_all.is_empty() && chunk_rate > 0 {
                         tts_seq += 1;
                         let dir = gabtwin_home()
                             .join("recordings")
@@ -435,14 +502,14 @@ fn start_tts_worker(
                         let _ = std::fs::create_dir_all(&dir);
                         let stamp = chrono::Local::now().format("%H%M%S").to_string();
                         let path = dir.join(format!("{stamp}-{tts_seq:03}.wav"));
-                        match gabtwin_tts::save_wav(&path, &samples, tts_rate) {
+                        match gabtwin_tts::save_wav(&path, &samples_all, chunk_rate) {
                             Ok(()) => {
                                 let record = serde_json::json!({
                                     "ts": chrono::Local::now().to_rfc3339(),
                                     "engine": engine,
                                     "text": text,
                                     "wav": path.display().to_string(),
-                                    "seconds": ms as f64 / 1000.0,
+                                    "seconds": samples_all.len() as f64 / chunk_rate as f64,
                                 });
                                 if let Ok(mut fh) = std::fs::OpenOptions::new()
                                     .create(true)
@@ -455,42 +522,6 @@ fn start_tts_worker(
                             }
                             Err(err) => log(format!("保存 TTS 音频失败：{err:#}")),
                         }
-                    }
-                    let audio = resample_linear(&samples, tts_rate, speaker.sample_rate);
-                    if !started {
-                        reply_text.clear();
-                    }
-                    reply_text.push_str(&text);
-                    *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
-                    queued_ms += ms;
-                    let first = !started;
-                    started = true;
-                    if first_push_at.is_none() {
-                        first_push_at = Some(Instant::now());
-                    }
-                    speaking.store(true, Ordering::SeqCst);
-                    if !mute.swap(true, Ordering::SeqCst) {
-                        log("TTS 播放：屏蔽麦克风");
-                    }
-                    speaker.push(audio);
-                    if first {
-                        let first_audio_ms = turn_started
-                            .lock()
-                            .ok()
-                            .and_then(|value| *value)
-                            .map(|at| at.elapsed().as_millis() as u64);
-                        log(format!(
-                            "TTS 首音 {:?} ms（首句合成 {} ms）",
-                            first_audio_ms,
-                            tick.elapsed().as_millis()
-                        ));
-                        let _ = app.emit(
-                            "tts-start",
-                            serde_json::json!({
-                                "first_audio_ms": first_audio_ms,
-                                "clause_ms": tick.elapsed().as_millis() as u64,
-                            }),
-                        );
                     }
                 }
             }

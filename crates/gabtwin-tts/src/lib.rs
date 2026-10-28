@@ -4,6 +4,7 @@
 //! 只要凑出一个能听懂的小句就先合成播放，后面的句子继续合成。
 
 use anyhow::{bail, Context, Result};
+use std::io::Read;
 use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsZipvoiceModelConfig};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,51 @@ impl RemoteTts {
 
     pub fn sample_rate(&self) -> u32 {
         22_050
+    }
+
+    /// 流式 PCM（s16le，24 kHz）：边收边回调，首块不再等整句。
+    pub fn stream_pcm<F>(&self, text: &str, on_chunk: &mut F) -> Result<()>
+    where
+        F: FnMut(&[f32], u32),
+    {
+        let response = self
+            .client
+            .post(format!("{}/tts_stream", self.url))
+            .json(&serde_json::json!({ "text": text, "lang": "zh" }))
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("远程 TTS 流式返回 {status}");
+        }
+        let rate = response
+            .headers()
+            .get("x-sample-rate")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(24_000);
+        let mut response = response;
+        let mut carry: Vec<u8> = Vec::new();
+        let mut raw = [0u8; 8192];
+        loop {
+            let read = response.read(&mut raw)?;
+            if read == 0 {
+                break;
+            }
+            carry.extend_from_slice(&raw[..read]);
+            let even = carry.len() & !1;
+            if even == 0 {
+                continue;
+            }
+            let samples: Vec<f32> = carry[..even]
+                .chunks_exact(2)
+                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / 32768.0)
+                .collect();
+            carry.drain(..even);
+            if !samples.is_empty() {
+                on_chunk(&samples, rate);
+            }
+        }
+        Ok(())
     }
 
     pub fn synthesize(&self, text: &str) -> Result<(Vec<f32>, u32)> {
