@@ -284,3 +284,14 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 - 配置：`GABTWIN_TTS_PAUSE=1`、`GABTWIN_TTS_PAUSE_MIN=300`、
   `GABTWIN_TTS_PAUSE_EXTRA=250`；
 - 语速：`GABTWIN_TTS_SPEED=0.9`。
+
+
+### 播放背压
+
+分段合成（RTF ~0.5）会比 1× 播放快；如果不加限制，10 s 播放环形缓冲会被塞满，
+从某一帧开始持续丢样本，听起来就是“突然变乱、断字”。
+
+- TTS worker 在每段开始前检查队列积压：`queued_ms - played`；
+- 积压超过 **6 s** 就等待播放追上，再合成下一段；
+- 配置：`GABTWIN_TTS_BACKLOG_MS=6000`；
+- 日志里不应再出现 `[audio] 播放缓冲满，丢弃 ...`。

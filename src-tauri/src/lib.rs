@@ -444,6 +444,23 @@ fn start_tts_worker(
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
                     }
+                    // 背压：分段合成比播放快，别把 10 秒播放缓冲塞满后丢样本。
+                    let backlog_limit = std::env::var("GABTWIN_TTS_BACKLOG_MS")
+                        .ok()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(6000);
+                    loop {
+                        let played = first_push_at
+                            .map(|at| at.elapsed().as_millis() as u64)
+                            .unwrap_or(0);
+                        let backlog = queued_ms.saturating_sub(played);
+                        if backlog <= backlog_limit {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(
+                            (backlog - backlog_limit).min(500),
+                        ));
+                    }
                     log(format!("TTS 句：{text}"));
                     let tick = Instant::now();
                     if !started {
