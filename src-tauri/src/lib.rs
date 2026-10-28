@@ -918,6 +918,66 @@ fn queue_segment(app: &AppHandle, text: String) {
     });
 }
 
+fn is_stage_direction(text: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "笑", "叹", "沉默", "轻声", "小声", "大声", "认真", "皱眉", "点头", "摇头",
+        "看着", "微笑", "表情", "动作", "语气", "无奈", "尴尬", "兴奋", "疲惫",
+        "咳", "哭", "唱", "摆手", "眨眼", "挑眉", "耸肩", "摊手", "呼吸", "想了想",
+        "顿了顿", "半晌", "片刻", "停了一下",
+        "走", "推", "坐", "站", "拿", "放", "转", "看", "听", "伸", "低", "抬",
+        "靠", "闭", "睁", "握", "摸", "拍", "敲", "打开", "关", "穿", "脱", "倒",
+        "喝", "吃", "睡", "醒", "起", "等", "窗", "门", "桌", "椅", "房", "路",
+        "风", "雨", "阳光", "手机", "杯", "水",
+    ];
+    WORDS.iter().any(|word| text.contains(word))
+}
+
+/// 去掉 LLM 回复里的动作/旁白：*...*、动作性（...）、【...】。
+/// 正常括号（如“（M1）”“（GitHub）”）保留。
+fn strip_stage_directions(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => {
+                for next in chars.by_ref() {
+                    if next == '*' || next == '\n' {
+                        break;
+                    }
+                }
+            }
+            '（' | '(' => {
+                let close = if c == '（' { '）' } else { ')' };
+                let mut inner = String::new();
+                let mut closed = false;
+                for next in chars.by_ref() {
+                    if next == close {
+                        closed = true;
+                        break;
+                    }
+                    inner.push(next);
+                }
+                if !closed || !is_stage_direction(&inner) {
+                    out.push(c);
+                    out.push_str(&inner);
+                    if closed {
+                        out.push(close);
+                    }
+                }
+            }
+            '【' => {
+                for next in chars.by_ref() {
+                    if next == '】' {
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
 fn correction_system() -> String {
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant. <|think_off|>\n\
      你是语音识别（ASR）校对器。只修改 ASR 文本中的错别字、同音字、漏字、多字、专有名词错误和明显的标点/断句问题。\n\
@@ -1087,12 +1147,20 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 let _ = app_handle.emit("llm-cancelled", serde_json::json!({ "turn_id": turn_id }));
             }
             Ok(r) if !r.text.trim().is_empty() => {
+                let reply = strip_stage_directions(&r.text);
+                if reply.is_empty() {
+                    let _ = app_handle.emit(
+                        "llm-cancelled",
+                        serde_json::json!({ "turn_id": turn_id }),
+                    );
+                    return;
+                }
                 if let Some(state) = app_handle.try_state::<LlmState>() {
-                    state.dialog.lock().unwrap().push_assistant(r.text.clone());
+                    state.dialog.lock().unwrap().push_assistant(reply.clone());
                 }
                 if let Some(tts) = app_handle.try_state::<TtsState>() {
                     if final_tts {
-                        tts.speak(&r.text);
+                        tts.speak(&reply);
                     } else {
                         tts.flush();
                     }
@@ -1101,7 +1169,7 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                     "llm-done",
                     serde_json::json!({
                         "turn_id": turn_id,
-                        "text": r.text,
+                        "text": reply,
                         "first_token_ms": r.first_token_ms,
                         "total_ms": r.total_ms,
                     }),
