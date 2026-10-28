@@ -259,16 +259,22 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
   `refs/g001.wav`（GLM 干净版）和对应文本。
 
 
-### 整段回答一次生成（默认）
+### 分段生成（默认）
 
-`GABTWIN_TTS_ONE_SHOT=1`（默认）：`TtsState::speak` 不再按标点切分，而是把 LLM 的
-最终整段回答作为一个 Clause 交给 Qwen3-TTS，sidecar 内部流式生成，应用边收边播。
+`GABTWIN_TTS_ONE_SHOT=0`（默认）：LLM 最终回答按标点切成 **首句 30 字 / 后续 40 字**
+的段，逐段送 Qwen3-TTS，按顺序播放。
 
-- 一次回答只有一次采样，语调/语气/音色/音量连续，听起来像一次生成；
-- 实测首音 0.91 s（首块 0.30 s）；日志里只有一个 `TTS 句`、只保存一个录音；
-- 代价：整段越长，模型后段稳定性越差；如果长回答出现劣化，设
-  `GABTWIN_TTS_ONE_SHOT=0` 回到标点分段（一致性会下降）。
+- 每段都是一次独立生成；超过 50 字的长回答不会整段崩掉；
+- 段与段之间再插 **250 ms** 静音（`GABTWIN_TTS_SEGMENT_GAP_MS`）；
+- 代价：段与段之间音色/语气可能略有差异，但长文本稳定；
+- 想回到“整段一次生成”（短回答更连贯）：`GABTWIN_TTS_ONE_SHOT=1`。
 
+### 语速与标点停顿
+
+- `GABTWIN_TTS_SPEED=0.85`（比 1.0 慢 15%）；
+- 标点停顿：只扩展 ≥300 ms 的真实静音，每个追加 **300 ms**
+  （`GABTWIN_TTS_PAUSE_MIN` / `GABTWIN_TTS_PAUSE_EXTRA`）；
+- 段间 250 ms + 标点 300 ms，整体节奏比之前舒缓。
 
 ### 标点停顿（默认开）
 

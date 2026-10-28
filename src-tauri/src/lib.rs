@@ -136,7 +136,7 @@ impl TtsState {
         let generation = self.generation.load(Ordering::SeqCst);
         let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
             .map(|value| value != "0")
-            .unwrap_or(true);
+            .unwrap_or(false);
         if one_shot {
             let text = text.trim();
             if text.is_empty() {
@@ -508,6 +508,21 @@ fn start_tts_worker(
                     }
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
+                    }
+                    // 分段之间留一点呼吸，避免下一句贴着上一句的尾音。
+                    let gap_ms = std::env::var("GABTWIN_TTS_SEGMENT_GAP_MS")
+                        .ok()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(250);
+                    if gap_ms > 0 {
+                        let gap = vec![0.0f32; (speaker.sample_rate as u64 * gap_ms / 1000) as usize];
+                        speaker.push(gap);
+                        queued_ms += gap_ms;
+                        if save_tts && chunk_rate > 0 {
+                            samples_all.extend(std::iter::repeat(0.0).take(
+                                (chunk_rate as u64 * gap_ms / 1000) as usize,
+                            ));
+                        }
                     }
                     if save_tts && !samples_all.is_empty() && chunk_rate > 0 {
                         tts_seq += 1;
