@@ -18,8 +18,74 @@ REF = None
 REF_TEXT = ""
 SAMPLE_RATE = 24000
 SPEED = 0.9
+PAUSE = True
+PAUSE_MIN_MS = 300
+PAUSE_EXTRA_MS = 250
 LOCK = threading.Lock()
 REQUEST_ID = 0
+
+
+
+def pcm_bytes(audio: np.ndarray) -> bytes:
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+def pcm_bytes(audio: np.ndarray) -> bytes:
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+class PauseExtender:
+    """只在真正的标点停顿（>=300ms 静音）后追加额外静音。"""
+
+    def __init__(self, sample_rate: int, extra_ms: int = 250, min_pause_ms: int = 300):
+        self.frame = max(1, int(sample_rate * 0.02))
+        self.min_samples = int(sample_rate * min_pause_ms / 1000)
+        self.extra = np.zeros(int(sample_rate * extra_ms / 1000), dtype=np.float32)
+        self.buf = np.zeros(0, dtype=np.float32)
+        self.silence: list[np.ndarray] = []
+        self.started = False
+
+    def push(self, audio: np.ndarray) -> np.ndarray:
+        self.buf = np.concatenate([self.buf, np.asarray(audio, dtype=np.float32)])
+        out: list[np.ndarray] = []
+        while len(self.buf) >= self.frame:
+            frame = self.buf[: self.frame]
+            self.buf = self.buf[self.frame :]
+            rms = float(np.sqrt(np.mean(frame * frame)))
+            if rms < 0.006:
+                if self.started:
+                    self.silence.append(frame)
+                else:
+                    out.append(frame)
+            else:
+                if self.silence:
+                    run = np.concatenate(self.silence)
+                    self.silence = []
+                    out.append(run)
+                    if len(run) >= self.min_samples:
+                        out.append(self.extra)
+                self.started = True
+                out.append(frame)
+        return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
+
+    def flush(self) -> np.ndarray:
+        out: list[np.ndarray] = []
+        if self.silence:
+            out.append(np.concatenate(self.silence))
+            self.silence = []
+        if len(self.buf):
+            out.append(self.buf)
+            self.buf = np.zeros(0, dtype=np.float32)
+        return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
+
+
+def extend_pauses(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    if not PAUSE:
+        return audio
+    extender = PauseExtender(sample_rate, PAUSE_EXTRA_MS, PAUSE_MIN_MS)
+    parts = [extender.push(audio), extender.flush()]
+    parts = [part for part in parts if len(part)]
+    return np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
 
 
 def generate(text: str):
@@ -49,6 +115,7 @@ def generate(text: str):
 
 def wav_bytes(text: str) -> bytes:
     audio, rate = generate(text)
+    audio = extend_pauses(audio, rate)
     buffer = io.BytesIO()
     sf.write(buffer, audio, rate, format="WAV", subtype="PCM_16")
     return buffer.getvalue()
@@ -110,6 +177,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Sample-Rate", "24000")
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
+            extender = PauseExtender(24000, PAUSE_EXTRA_MS, PAUSE_MIN_MS) if PAUSE else None
             with LOCK:
                 for result in MODEL.generate(
                     text=text,
@@ -123,7 +191,16 @@ class Handler(BaseHTTPRequestHandler):
                         print("[tts] stream cancelled by newer request", flush=True)
                         break
                     audio = np.array(result.audio, dtype=np.float32)
-                    pcm = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                    if extender is not None:
+                        audio = extender.push(audio)
+                    pcm = pcm_bytes(audio)
+                    if pcm:
+                        self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
+                        self.wfile.write(pcm)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                if extender is not None:
+                    pcm = pcm_bytes(extender.flush())
                     if pcm:
                         self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
                         self.wfile.write(pcm)
@@ -148,11 +225,17 @@ def main():
     parser.add_argument("--ref-text", required=True)
     parser.add_argument("--port", type=int, default=8800)
     parser.add_argument("--speed", type=float, default=0.9)
+    parser.add_argument("--pause", type=int, default=1)
+    parser.add_argument("--pause-min", type=int, default=300)
+    parser.add_argument("--pause-extra", type=int, default=250)
     parser.add_argument("--warmup", default="你好。")
     args = parser.parse_args()
 
-    global SPEED
+    global SPEED, PAUSE, PAUSE_MIN_MS, PAUSE_EXTRA_MS
     SPEED = args.speed
+    PAUSE = args.pause != 0
+    PAUSE_MIN_MS = args.pause_min
+    PAUSE_EXTRA_MS = args.pause_extra
     REF = args.ref
     REF_TEXT = args.ref_text
     print(f"[tts] loading {args.model}", flush=True)

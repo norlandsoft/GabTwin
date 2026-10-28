@@ -268,3 +268,13 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 - 实测首音 0.91 s（首块 0.30 s）；日志里只有一个 `TTS 句`、只保存一个录音；
 - 代价：整段越长，模型后段稳定性越差；如果长回答出现劣化，设
   `GABTWIN_TTS_ONE_SHOT=0` 回到标点分段（一致性会下降）。
+
+
+### 标点停顿（默认开）
+
+- sidecar 检测音频里的真实静音，只有**长度 ≥300 ms** 的静音（标点/换气）才追加 **250 ms**；
+- 低于 300 ms 的词间缝隙不动，避免流式分块边界被误判；
+- 该逻辑同时用于 `/tts` 和 `/tts_stream`，保持一次生成的音色；
+- 配置：`GABTWIN_TTS_PAUSE=1`、`GABTWIN_TTS_PAUSE_MIN=300`、
+  `GABTWIN_TTS_PAUSE_EXTRA=250`；
+- 语速：`GABTWIN_TTS_SPEED=0.9`。

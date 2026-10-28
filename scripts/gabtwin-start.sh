@@ -139,6 +139,9 @@ elif [[ "${GABTWIN_TTS:-qwen3tts}" == "qwen3tts" ]]; then
         --ref "$GABTWIN_HOME/tts/gyy-ref.wav" \
         --ref-text "思维方式的后遗症就是你你你会很珍惜当下这个东西。但是其实你走过来，你会发现每一刻都挺值得珍惜的。" \
         --speed "${GABTWIN_TTS_SPEED:-0.9}" \
+        --pause "${GABTWIN_TTS_PAUSE:-1}" \
+        --pause-min "${GABTWIN_TTS_PAUSE_MIN:-300}" \
+        --pause-extra "${GABTWIN_TTS_PAUSE_EXTRA:-250}" \
         --port 8800 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/tts-sidecar.pid"
       for _ in $(seq 1 180); do
