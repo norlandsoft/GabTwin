@@ -235,3 +235,12 @@ ASR 在停顿处会切出两个 Segment。默认在 **600 ms** 内到达的 Segm
   音频强制定稿，不再直接 `reset()`；
 - 当前流式引擎（streaming paraformer）+ SenseVoice 定稿已经够用；
   换 streaming zipformer 端点规则相同，换模型解决不了“松手太早”，收尾才是关键。
+
+
+### PTT 按住期间不启动回答
+
+- 按住空格时，即使 ASR 因中途停顿定稿出 Segment，也只进入 `LlmState.held`，
+  **不启动 LLM/TTS**；
+- 松手后：会话再保留 1.3 s 尾巴并定稿最后一段，应用把 held + 最后一段合并成一轮；
+- 如果松手 2.5 s 后仍没有新 Segment，用 held 兜底启动，避免一句话因为端点没触发而丢失；
+- 因此“说完再松手”才会回答；中途停顿只影响 ASR 分段，不会提前接话。

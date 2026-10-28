@@ -615,6 +615,8 @@ struct LlmState {
     /// 小停顿被 ASR 切成多段时，先把文本攒在这里再合并成一轮。
     pending: Mutex<Option<String>>,
     segment_seq: AtomicU64,
+    /// PTT 按住期间定稿的段落：先存着，松手后再合并送 LLM。
+    held: Mutex<Vec<String>>,
 }
 
 impl LlmState {
@@ -655,6 +657,7 @@ impl LlmState {
             cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             pending: Mutex::new(None),
             segment_seq: AtomicU64::new(0),
+            held: Mutex::new(Vec::new()),
         }
     }
 }
@@ -827,8 +830,27 @@ fn begin(app: &AppHandle, mode: Mode) -> Result<(), String> {
                         log("忽略疑似 TTS 回声，不进入 LLM");
                         return;
                     }
+                    if tts.ptt.load(Ordering::SeqCst) {
+                        if let Some(llm) = llm_app.try_state::<LlmState>() {
+                            llm.held.lock().unwrap().push(text.clone());
+                            log(format!("PTT 按住中，暂存段落：{text}"));
+                        }
+                        return;
+                    }
                 }
-                queue_segment(&llm_app, text.clone());
+                let combined = if let Some(llm) = llm_app.try_state::<LlmState>() {
+                    let mut held = llm.held.lock().unwrap();
+                    if held.is_empty() {
+                        text.clone()
+                    } else {
+                        let mut all = std::mem::take(&mut *held);
+                        all.push(text.clone());
+                        all.join("")
+                    }
+                } else {
+                    text.clone()
+                };
+                queue_segment(&llm_app, combined);
             }
         };
 
@@ -1049,6 +1071,7 @@ fn ptt_press(app: AppHandle) {
             llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
             llm.segment_seq.fetch_add(1, Ordering::SeqCst);
             *llm.pending.lock().unwrap() = None;
+            llm.held.lock().unwrap().clear();
         }
         log("PTT 按下：开麦并打断");
     }
@@ -1060,6 +1083,32 @@ fn ptt_release(app: AppHandle) {
         tts.ptt.store(false, Ordering::SeqCst);
         log("PTT 松开");
     }
+    // 松手后等会话尾巴（约 1.3 s）和 SenseVoice 定稿；若仍没有新 Segment，
+    // 用按住期间暂存的段落兜底启动一轮。
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(2500));
+        let Some(tts) = app_handle.try_state::<TtsState>() else {
+            return;
+        };
+        if tts.ptt.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(llm) = app_handle.try_state::<LlmState>() else {
+            return;
+        };
+        let text = {
+            let mut held = llm.held.lock().unwrap();
+            if held.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *held).join("")
+        };
+        if !text.trim().is_empty() {
+            log(format!("PTT 松开兜底定稿：{text}"));
+            queue_segment(&app_handle, text);
+        }
+    });
 }
 
 #[tauri::command]
@@ -1068,6 +1117,7 @@ fn clear_memory(app: AppHandle) {
         llm.cancel.lock().unwrap().store(true, Ordering::SeqCst);
         llm.segment_seq.fetch_add(1, Ordering::SeqCst);
         *llm.pending.lock().unwrap() = None;
+        llm.held.lock().unwrap().clear();
         *llm.dialog.lock().unwrap() = Dialog::new(llm.system.clone());
     }
     if let Some(tts) = app.try_state::<TtsState>() {
