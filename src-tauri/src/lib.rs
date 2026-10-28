@@ -38,6 +38,7 @@ fn install_signal_logging() {
 enum TtsCommand {
     Clause { generation: u64, text: String },
     Stop,
+    ResetVoice,
     Flush { generation: u64 },
 }
 
@@ -112,6 +113,12 @@ impl TtsState {
         self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(tx) = self.tx.lock().unwrap().as_ref() {
             let _ = tx.send(TtsCommand::Stop);
+        }
+    }
+
+    fn voice_reset(&self) {
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            let _ = tx.send(TtsCommand::ResetVoice);
         }
     }
 
@@ -207,6 +214,13 @@ impl Synth {
             Self::Local(tts) => tts.sample_rate(),
             Self::Remote(remote) => remote.sample_rate(),
             Self::Glm(glm) => glm.sample_rate(),
+        }
+    }
+
+    fn voice_reset(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Remote(remote) => remote.voice_reset(),
+            _ => Ok(()),
         }
     }
 
@@ -400,6 +414,11 @@ fn start_tts_worker(
         let mut first_push_at: Option<Instant> = None;
         while let Ok(command) = rx.recv() {
             match command {
+                TtsCommand::ResetVoice => {
+                    if let Err(err) = synth.voice_reset() {
+                        log(format!("TTS 音色会话重置失败：{err:#}"));
+                    }
+                }
                 TtsCommand::Stop => {
                     *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
                     reply_text.clear();
@@ -1395,6 +1414,7 @@ fn clear_memory(app: AppHandle) {
     }
     if let Some(tts) = app.try_state::<TtsState>() {
         tts.stop();
+        tts.voice_reset();
     }
     log("历史记忆已清空");
 }

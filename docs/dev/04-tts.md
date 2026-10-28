@@ -295,3 +295,16 @@ workspace/tts/qwen-ref-default-female.wav   （3.5 s，f0 ~230–247 Hz）
 - 积压超过 **6 s** 就等待播放追上，再合成下一段；
 - 配置：`GABTWIN_TTS_BACKLOG_MS=6000`；
 - 日志里不应再出现 `[audio] 播放缓冲满，丢弃 ...`。
+
+
+### 会话音色锁定
+
+分段生成时每段独立采样，音调会飘。现在同一对话内：
+
+- 前 1–2 段仍用 gyy 参考音；
+- sidecar 累计这些段的音频，达到 **3 秒**后写成
+  `/tmp/gabtwin-session-ref.wav`，作为后续所有段的参考音；
+- 后续段仍独立生成（长文本稳定），但音色/音调跟随第一段；
+- 生成温度降到 **0.7**，减少段间随机差异；
+- 清空记忆时 app 调 `POST /voice_reset`，下个对话重新锁定；
+- 日志：`[tts] session ref locked: 5.12s`。

@@ -84,6 +84,15 @@ impl RemoteTts {
         22_050
     }
 
+    /// 重置同一对话的音色会话（sidecar 会清掉“第一段参考音”）。
+    pub fn voice_reset(&self) -> Result<()> {
+        self.client
+            .post(format!("{}/voice_reset", self.url))
+            .send()?
+            .error_for_status()?;
+        Ok(())
+    }
+
     /// 流式 PCM（s16le，24 kHz）：边收边回调，首块不再等整句。
     pub fn stream_pcm<F>(&self, text: &str, on_chunk: &mut F) -> Result<()>
     where

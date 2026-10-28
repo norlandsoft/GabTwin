@@ -22,12 +22,42 @@ PAUSE = True
 PAUSE_MIN_MS = 300
 PAUSE_EXTRA_MS = 300
 LOCK = threading.Lock()
+SESSION_REF_PATH = "/tmp/gabtwin-session-ref.wav"
+SESSION_REF = None
+SESSION_TEXT = ""
+SESSION_AUDIO: list[np.ndarray] = []
+SESSION_TEXTS: list[str] = []
 REQUEST_ID = 0
 
 
 
-def pcm_bytes(audio: np.ndarray) -> bytes:
-    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+def current_ref():
+    """同一对话内，后续段落沿用第一段生成音频做音色参考。"""
+    if SESSION_REF is not None:
+        return SESSION_REF, SESSION_TEXT
+    return REF, REF_TEXT
+
+
+def remember_session(audio: np.ndarray, rate: int, text: str) -> None:
+    global SESSION_REF, SESSION_TEXT
+    if SESSION_REF is not None:
+        return
+    SESSION_AUDIO.append(np.asarray(audio, dtype=np.float32))
+    SESSION_TEXTS.append(text)
+    total = np.concatenate(SESSION_AUDIO)
+    if len(total) >= 3.0 * rate:
+        sf.write(SESSION_REF_PATH, total, rate, subtype="PCM_16")
+        SESSION_REF = SESSION_REF_PATH
+        SESSION_TEXT = "".join(SESSION_TEXTS)
+        print(f"[tts] session ref locked: {len(total) / rate:.2f}s", flush=True)
+
+
+def reset_session() -> None:
+    global SESSION_REF, SESSION_TEXT, SESSION_AUDIO, SESSION_TEXTS
+    SESSION_REF = None
+    SESSION_TEXT = ""
+    SESSION_AUDIO = []
+    SESSION_TEXTS = []
 
 
 def pcm_bytes(audio: np.ndarray) -> bytes:
@@ -92,16 +122,18 @@ def generate(text: str):
     global REQUEST_ID
     REQUEST_ID += 1
     my_id = REQUEST_ID
+    ref_audio, ref_text = current_ref()
     with LOCK:
         chunks = []
         rate = SAMPLE_RATE
         for result in MODEL.generate(
             text=text,
-            ref_audio=REF,
-            ref_text=REF_TEXT,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
             stream=True,
             streaming_interval=0.25,
             speed=SPEED,
+            temperature=0.7,
         ):
             if my_id != REQUEST_ID:
                 print("[tts] cancelled by newer request", flush=True)
@@ -110,7 +142,9 @@ def generate(text: str):
             rate = getattr(result, "sample_rate", rate)
         if not chunks:
             return np.zeros(0, dtype=np.float32), rate
-        return np.concatenate(chunks), rate
+        audio = np.concatenate(chunks)
+        remember_session(audio, rate, text)
+        return audio, rate
 
 
 def wav_bytes(text: str) -> bytes:
@@ -145,6 +179,9 @@ class Handler(BaseHTTPRequestHandler):
             self._full_tts()
         elif self.path == "/tts_stream":
             self._stream_tts()
+        elif self.path == "/voice_reset":
+            reset_session()
+            self._send(200, b"ok", "text/plain")
         else:
             self._send(404, b"not found", "text/plain")
 
@@ -178,19 +215,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
             extender = PauseExtender(24000, PAUSE_EXTRA_MS, PAUSE_MIN_MS) if PAUSE else None
+            ref_audio, ref_text = current_ref()
+            session_audio = []
             with LOCK:
                 for result in MODEL.generate(
                     text=text,
-                    ref_audio=REF,
-                    ref_text=REF_TEXT,
+                    ref_audio=ref_audio,
+                    ref_text=ref_text,
                     stream=True,
                     streaming_interval=0.25,
                     speed=SPEED,
+                    temperature=0.7,
                 ):
                     if my_id != REQUEST_ID:
                         print("[tts] stream cancelled by newer request", flush=True)
                         break
                     audio = np.array(result.audio, dtype=np.float32)
+                    session_audio.append(audio)
                     if extender is not None:
                         audio = extender.push(audio)
                     pcm = pcm_bytes(audio)
@@ -206,6 +247,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(pcm)
                         self.wfile.write(b"\r\n")
                         self.wfile.flush()
+                remember_session(np.concatenate(session_audio), 24000, text)
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
