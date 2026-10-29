@@ -3,7 +3,7 @@ const invoke = tauri?.core?.invoke;
 const listen = tauri?.event?.listen;
 
 const $ = (id) => document.getElementById(id);
-const stage = $("stage");
+const transcript = $("transcript");
 const conversation = $("conversation");
 const live = $("live");
 const hint = $("hint");
@@ -13,6 +13,46 @@ let current = null; // { id, el, text }
 let llmConfigured = false;
 let llmMissingShown = false;
 let audioState = "idle";
+let avatar = null;
+let avatarMoodTimer = null;
+let avatarErrorTimer = null;
+
+const AVATAR_MOOD = {
+  idle: "在这里",
+  listening: "在听你说",
+  thinking: "在想…",
+  speaking: "在说",
+  interrupted: "被逗到了",
+  error: "有点慌",
+};
+
+function setAvatarState(state) {
+  const mood = $("avatarMood");
+  if (mood) mood.textContent = AVATAR_MOOD[state] || "";
+  if (!avatar) return;
+  avatar.setState(state);
+  clearTimeout(avatarMoodTimer);
+  clearTimeout(avatarErrorTimer);
+  if (state === "interrupted") {
+    avatarMoodTimer = setTimeout(() => {
+      const next =
+        audioState === "listening" || audioState === "replaying" ? "listening" : "idle";
+      avatar?.setState(next);
+      if (mood) mood.textContent = AVATAR_MOOD[next];
+    }, 650);
+  }
+}
+
+function recoverAvatarSoon(delay = 1800) {
+  clearTimeout(avatarErrorTimer);
+  avatarErrorTimer = setTimeout(() => {
+    avatarErrorTimer = null;
+    if (!avatar || avatar.isSpeaking()) return;
+    const next =
+      audioState === "listening" || audioState === "replaying" ? "listening" : "idle";
+    setAvatarState(next);
+  }, delay);
+}
 
 const STATE_TEXT = {
   idle: "待机",
@@ -113,7 +153,7 @@ function commonPrefix(a, b) {
 }
 
 function scrollToBottom() {
-  stage.scrollTop = stage.scrollHeight;
+  transcript.scrollTop = transcript.scrollHeight;
 }
 
 function appendUser(text) {
@@ -162,15 +202,19 @@ function onSessionEvent(payload) {
       if (state === "loading") {
         clearAll();
         audioState = "loading";
+        setAvatarState("idle");
         setStatus("loading");
       } else if (state === "listening") {
         audioState = "listening";
+        setAvatarState("listening");
         setStatus("listening");
       } else if (state === "replaying") {
         audioState = "replaying";
+        setAvatarState("listening");
         setStatus("replaying");
       } else if (state === "idle") {
         audioState = "idle";
+        if (!avatar?.isSpeaking()) setAvatarState("idle");
         setStatus(current ? "replying" : "idle");
       }
       break;
@@ -180,6 +224,7 @@ function onSessionEvent(payload) {
       break;
     case "level":
       $("level").style.width = `${Math.min(100, payload.rms * 380)}%`;
+      avatar?.setMicLevel(payload.rms);
       break;
     case "partial":
       renderLive(payload.text, payload.onset_ms);
@@ -191,8 +236,10 @@ function onSessionEvent(payload) {
       lastPartial = "";
       $("endpoint").textContent = `${payload.latency_ms} ms`;
       if (llmConfigured) {
+        setAvatarState("thinking");
         setStatus("thinking");
       } else {
+        setAvatarState("listening");
         setStatus(audioState === "replaying" ? "replaying" : "listening");
       }
       break;
@@ -208,15 +255,19 @@ function onSessionEvent(payload) {
       hint.textContent = payload.message;
       break;
     case "error":
+      setAvatarState("error");
+      recoverAvatarSoon(2400);
       setStatus("error", payload.message);
       break;
   }
 }
 
 function onTtsStart(payload) {
+  clearSpeakingTimer();
   if (payload.first_audio_ms != null) {
     $("firstAudio").textContent = `${payload.first_audio_ms} ms`;
   }
+  setAvatarState("speaking");
   setStatus("speaking");
 }
 
@@ -225,6 +276,8 @@ function onTtsQueued(payload) {
   const wait = Math.max(300, (payload.duration_ms || 0) + 150);
   speakingTimer = setTimeout(() => {
     speakingTimer = null;
+    const next = audioState === "listening" || audioState === "replaying" ? "listening" : "idle";
+    setAvatarState(next);
     setStatus(audioState === "idle" ? "idle" : audioState);
   }, wait);
 }
@@ -235,6 +288,7 @@ function onLlmThinking(payload) {
     current = null;
   }
   startAssistant(payload.turn_id);
+  setAvatarState("thinking");
   setStatus("thinking");
 }
 
@@ -242,6 +296,7 @@ function onLlmDelta(payload) {
   if (!current || payload.turn_id !== current.id) return;
   current.text += payload.text;
   current.el.textContent = current.text;
+  if (!avatar?.isSpeaking()) setAvatarState("thinking");
   setStatus("replying");
   scrollToBottom();
 }
@@ -254,12 +309,17 @@ function onLlmDone(payload) {
     $("ttft").textContent = `${payload.first_token_ms} ms`;
   }
   current = null;
+  if (!avatar?.isSpeaking()) {
+    setAvatarState(audioState === "listening" ? "listening" : "idle");
+  }
   setStatus(audioState === "idle" ? "idle" : audioState);
   scrollToBottom();
 }
 
 function onLlmError(payload) {
   clearSpeakingTimer();
+  setAvatarState("error");
+  recoverAvatarSoon();
   if (payload.turn_id === 0) {
     if (!llmMissingShown) {
       llmMissingShown = true;
@@ -284,6 +344,11 @@ function onLlmCancelled(payload) {
     current.el.remove();
     current = null;
   }
+  if (avatar?.isSpeaking()) {
+    setAvatarState("interrupted");
+  } else {
+    setAvatarState(audioState === "listening" ? "listening" : "idle");
+  }
   setStatus(audioState === "idle" ? "idle" : audioState);
 }
 
@@ -295,15 +360,40 @@ async function guard(promise) {
   }
 }
 
+function initAvatar() {
+  if (!window.GabTwinAvatar) {
+    console.warn("[avatar] vendor/avatar.js 未加载");
+    return;
+  }
+  avatar = window.GabTwinAvatar.init({ canvas: $("avatarCanvas") });
+  if (avatar) {
+    window.__gabtwinAvatar = avatar;
+    setAvatarState("idle");
+  }
+}
+
+initAvatar();
+
 if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
 } else {
   listen("session-event", (e) => onSessionEvent(e.payload || {}));
+  listen("avatar-event", (e) => {
+    const payload = e.payload || {};
+    if (!avatar) return;
+    if (payload.kind === "frame") {
+      avatar.setLevel(payload.rms || 0);
+      avatar.setPlayedMs(payload.played_ms || 0);
+    } else if (payload.kind === "stop") {
+      if (avatar.isSpeaking()) setAvatarState("interrupted");
+    }
+  });
   $("clearMemory").addEventListener("click", () => {
     if (invoke) invoke("clear_memory").catch(() => {});
     conversation.innerHTML = "";
     live.innerHTML = "";
     hint.textContent = "记忆已清空，重新开始。";
+    setAvatarState("idle");
   });
   const settingsModal = $("settingsModal");
   const personaInput = $("personaInput");
@@ -366,6 +456,7 @@ if (!invoke) {
     if (!invoke || pttHeld) return;
     pttHeld = true;
     setPttLabel("正在听…松开空格发送");
+    setAvatarState("listening");
     invoke("ptt_press").catch(() => {});
   });
   window.addEventListener("keyup", (e) => {
@@ -388,6 +479,7 @@ if (!invoke) {
         closeSettings();
         return;
       }
+      setAvatarState("interrupted");
       invoke("interrupt").catch(() => {});
     }
   });
@@ -419,6 +511,8 @@ if (!invoke) {
   listen("tts-queued", (e) => onTtsQueued(e.payload || {}));
   listen("tts-error", (e) => {
     const message = (e.payload || {}).message || "TTS 不可用";
+    setAvatarState("error");
+    recoverAvatarSoon(2400);
     hint.style.display = "";
     hint.classList.add("error");
     hint.textContent = message;
@@ -432,6 +526,7 @@ if (!invoke) {
 
   $("stop").addEventListener("click", () => {
     $("stop").disabled = true;
+    setAvatarState("idle");
     guard(invoke("stop_listening"));
   });
 
@@ -458,4 +553,5 @@ if (!invoke) {
     .catch(() => {});
 
   setStatus("idle");
+  setAvatarState("idle");
 }

@@ -109,7 +109,7 @@ if [[ "${GABTWIN_LLM:-local}" == "local" ]]; then
   fi
 fi
 
-# 3. TTS 引擎：默认 Breeze sidecar；GABTWIN_TTS=indextts 切 IndexTTS；local 回退本地
+# 3. TTS 引擎：默认 Qwen3-TTS；GABTWIN_TTS=breeze 切 Breeze，indextts 切 IndexTTS；local 回退本地
 if [[ "${GABTWIN_TTS:-breeze}" == "indextts" ]]; then
   if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/index-tts-2.5-mlx" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8798/health >/dev/null 2>&1; then
@@ -155,13 +155,13 @@ elif [[ "${GABTWIN_TTS:-qwen3tts}" == "qwen3tts" ]]; then
     echo "提示：Qwen3-TTS 模型/参考音缺失，回退本地 TTS"
   fi
 elif [[ "${GABTWIN_TTS:-qwen3tts}" == "breeze" ]]; then
-  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/breeze-tts2-4bit" && -f "$GABTWIN_HOME/tts/index-ref.wav" ]]; then
+  if [[ -x "$ROOT/.venv-mlx/bin/python" && -d "$GABTWIN_MODELS_DIR/tts/breeze-tts2-4bit" && -f "$GABTWIN_HOME/tts/gyy-ref.wav" && -f "$GABTWIN_HOME/tts/gyy-ref.txt" ]]; then
     if ! curl -fsS --max-time 2 http://127.0.0.1:8799/health >/dev/null 2>&1; then
       echo "启动 Breeze TTS sidecar…"
       nohup "$ROOT/.venv-mlx/bin/python" "$ROOT/scripts/breeze_tts_sidecar.py" \
         --model "$GABTWIN_MODELS_DIR/tts/breeze-tts2-4bit" \
-        --ref "$GABTWIN_HOME/tts/index-ref.wav" \
-        --ref-text "今天早上我起得有点晚，差一点就错过地铁了。" \
+        --ref "$GABTWIN_HOME/tts/gyy-ref.wav" \
+        --ref-text "$(cat "$GABTWIN_HOME/tts/gyy-ref.txt")" \
         --port 8799 >> "$LOG_DIR/tts-sidecar.log" 2>&1 &
       echo $! > "$GABTWIN_HOME/tts-sidecar.pid"
       for _ in $(seq 1 180); do

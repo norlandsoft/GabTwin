@@ -173,9 +173,22 @@ afplay /tmp/say-tingting.wav        # macOS Tingting（零依赖）
 
 `GABTWIN_TTS_FINAL=1`（默认）：等 LLM 完整返回后，用最终文本一次性送 TTS。
 这样念出来的内容与 LLM 的最终回答严格一致，不会把中途分片或旧轮次混进来；
-代价是首音要等 LLM 结束（本地 9B 通常 0.5–2 s）。
+不打开 `GABTWIN_TTS_OVERLAP` 时，代价是首音要等 LLM 结束（本地 9B 通常 0.5–2 s）。
 
 `GABTWIN_TTS_FINAL=0` 恢复边收 delta 边合成，首音更早，但以流式文本为准。
+
+
+### 流式首句（`GABTWIN_TTS_OVERLAP=1`）
+
+默认 `FINAL=1` 的代价是首音要等 LLM 全文。打开 `OVERLAP=1` 后：
+
+- LLM 边输出边攒，第一句完整（`。！？；`）就立刻送 TTS；
+- 第一句之后的内容不再切，等 LLM 结束后**整段一次**送 TTS；
+- 整条回复最多一个拼接点（第一句之后），不是每句一个；
+- 首句上限 `GABTWIN_TTS_OVERLAP_MAX_FIRST`（默认 30 字）；只有超长句才退到最后一个逗号；
+- 实测（Breeze，184 字回复）：首音 **1.98 s**（之前整段 6.68 s），日志里只有两条 `TTS 句`。
+
+第一句仍然来自流式 delta，`strip_stage_directions` 目前只作用于最终全文；如果发现 AI 把括号里的舞台提示念出来，需要把首句也过一遍清理。
 
 
 ### 取消过期请求
@@ -327,3 +340,68 @@ ASR 都完整；如果仍想试整段生成，可设 `GABTWIN_TTS_ONE_SHOT=1`。
 Qwen 输出带一点低频/直流分量，流式路径原本没有走应用里的 80 Hz 高通。
 sidecar 现在对每段先做 **90 Hz 二阶高通**，再做淡入淡出、标点停顿和段间静音；
 `/tts` 与 `/tts_stream` 都生效。
+
+
+## Breeze 情绪稳定（2026-10-29，已回退）
+
+> 实机试用后回退：`GABTWIN_BREEZE_*` 稳定模式（greedy + instruct + 逐 0.25 s AGC）
+> 出现明显卡顿和噪音失真，当前**未启用**；下面仅保留实验记录。
+
+问题：Breeze 默认 `temperature=0.9`、无 instruct 时，同一段高兴文本的 f0 会随机
+拔高——实测中位 237 Hz、p95 386 Hz（+8.4 半音）、瞬时最高 500+ Hz，听起来就是
+“突然很尖锐”。换 seed / 降温度并不能解决，反而会整体移调（中位 313 Hz）。
+
+当前稳定模式：
+
+- `GABTWIN_BREEZE_INSTRUCT`：英文 instruct，要求“高兴但克制，音高范围、音量、音色
+  与参考音一致，不要拔高、不要喊”；
+- `GABTWIN_BREEZE_CFG_SCALE=2.0`：让 instruct 真正生效；
+- `GABTWIN_BREEZE_TEMPERATURE=0.0`：greedy，去掉随机选到高音调的可能性；
+- `GABTWIN_BREEZE_AGC=1`：sidecar 内慢速自动增益，把不同情绪的段拉到约 −20 dBFS；
+- 少于 8 个字的短句（如开场的“你好”）不套稳定模式，避免 greedy 在极短文本上
+  不收敛、生成几十秒。
+
+实测（同一段“高兴”）：
+
+| | f0 中位 | p95 | 最高 | p95 半音 | RMS | 质心 |
+|---|---:|---:|---:|---:|---:|---:|
+| 原设置 | 237 | 386 | 500+ | +8.4 | −24.2 | 2658 |
+| 稳定模式 | **203** | **280** | **314** | **+5.6** | −21.0 | 2853 |
+
+- 三段不同情绪（高兴×2、中性）的整段 RMS 落在 −21.0 / −21.9 / −22.7 dB，差约 1.7 dB；
+- 首块 **0.74 s**，9.12 s 音频总合成 8.4 s（RTF≈0.92），sidecar 启动约 3 s；
+- 代价：greedy 可能比采样版“平”一点；如果觉得太收，把
+  `GABTWIN_BREEZE_TEMPERATURE` 调到 `0.2`、`CFG_SCALE` 调到 `2.5` 试折中。
+
+回退：把 `GABTWIN_BREEZE_TEMPERATURE` 改回 `0.9`，清空
+`GABTWIN_BREEZE_INSTRUCT` / `GABTWIN_BREEZE_CFG_SCALE`，或把 `GABTWIN_BREEZE_AGC=0`，
+重启生效。
+
+对照试听：`workspace/eval/breeze-stability/compare.html`。
+
+
+## 感叹号降级（2026-10-29，当前生效）
+
+日志里抓到了真正的触发点：
+
+```text
+[18:41:27] TTS 句：狸猫！
+```
+
+Breeze 把孤立的“狸猫！”合成成了 420 Hz 左右的一声喊（RMS −14.5 dB）。同一句改成
+“狸猫。”或“狸猫，那种特别瘦的野猫……”后，f0 回到 176–180 Hz、RMS 降到 −29 dB 左右。
+
+现在在**送 TTS 之前**统一处理（显示文本不变）：
+
+- `！` / `!` → `，`；
+- 连续逗号合并；
+- 结尾的逗号/顿号去掉，补 `。`；
+- 问号保留。
+
+实现：`gabtwin-tts::sanitize_for_tts`，`TtsState::speak` / `finish_overlap` / `flush`
+都会先过一遍；`OverlapSplitter` 的文本清理也会把 `！` 降成 `，`，所以“狸猫！”
+不会再被切成一个孤立的短段。首段最小字数另由
+`GABTWIN_TTS_OVERLAP_MIN_FIRST`（默认 12）兜底。
+
+代价：感叹号带来的“拔高”没有了，情绪主要靠用词和语气；如果以后觉得太平，
+可以只对长句保留 `！`，但短感叹（≤8 字）必须降级。

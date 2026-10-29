@@ -644,6 +644,130 @@ impl ClauseSplitter {
     }
 }
 
+/// 流式首句切分：只切出第一句，之后全部攒着，等 LLM 结束后一次送出。
+///
+/// 目的：LLM 一边输出，TTS 先把第一句念出来；剩余整段仍然一次合成，
+/// 整条回复最多一个拼接点，而不是每句一个。
+pub struct OverlapSplitter {
+    buffer: String,
+    first: Option<String>,
+    max_first: usize,
+    /// 第一段至少攒这么多字再送 TTS；避免把“狸猫！”这种短感叹单独合成成一声吼。
+    min_first: usize,
+}
+
+impl OverlapSplitter {
+    pub fn new(max_first: usize) -> Self {
+        Self::with_first_min(max_first, 12)
+    }
+
+    pub fn with_first_min(max_first: usize, min_first: usize) -> Self {
+        Self {
+            buffer: String::new(),
+            first: None,
+            max_first: max_first.max(12),
+            min_first: min_first.max(3),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.buffer.clear();
+        self.first = None;
+    }
+
+    /// 喂一段流式文本。只有第一句会返回；之后返回 None，直到 finish。
+    pub fn push(&mut self, delta: &str) -> Option<String> {
+        self.buffer.push_str(delta);
+        self.buffer = clean(&self.buffer);
+        if self.first.is_some() {
+            return None;
+        }
+        let cut = find_first_cut(&self.buffer, self.max_first, self.min_first)?;
+        let clause = self.buffer[..cut].trim().to_string();
+        let rest = self.buffer[cut..].trim_start().to_string();
+        if !is_speakable(&clause) {
+            self.buffer = rest;
+            return None;
+        }
+        self.buffer = rest;
+        self.first = Some(clause.clone());
+        Some(clause)
+    }
+
+    /// LLM 结束：返回第一句之后的所有内容；如果第一句还没切出来，返回整段。
+    pub fn finish(&mut self, full: &str) -> Option<String> {
+        let full = full.trim();
+        let rest = if let Some(first) = &self.first {
+            if let Some(rest) = full.strip_prefix(first.as_str()) {
+                rest.trim().to_string()
+            } else if let Some(pos) = full.find(first.as_str()) {
+                full[pos + first.len()..].trim().to_string()
+            } else {
+                self.buffer.trim().to_string()
+            }
+        } else {
+            full.to_string()
+        };
+        self.buffer.clear();
+        self.first = None;
+        if is_speakable(&rest) {
+            Some(rest)
+        } else {
+            None
+        }
+    }
+}
+
+/// 找第一句的切点：句末标点优先；超过 max_first 才退到最后一个逗号。
+fn find_first_cut(text: &str, max_first: usize, min_first: usize) -> Option<usize> {
+    let mut chars = 0usize;
+    let mut depth = 0i32;
+    let mut last_comma: Option<usize> = None;
+
+    for (idx, c) in text.char_indices() {
+        chars += 1;
+        let end = idx + c.len_utf8();
+        match c {
+            '「' | '『' | '“' | '‘' | '（' | '(' | '《' | '【' | '[' => depth += 1,
+            '」' | '』' | '”' | '’' | '）' | ')' | '》' | '】' | ']' => {
+                depth = (depth - 1).max(0)
+            }
+            _ => {}
+        }
+        if depth == 0 && matches!(c, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n') {
+            // 太短的感叹/招呼不单独成段，接着攒到下一句；否则 Breeze 会把
+            // 孤立的“狸猫！”合成成一声喊。
+            if chars >= min_first {
+                return Some(end);
+            }
+            continue;
+        }
+        if depth == 0 && matches!(c, '，' | ',' | '、' | '：' | ':') {
+            last_comma = Some(end);
+        }
+        if chars >= max_first {
+            if depth == 0 {
+                // 下一个字符就是句末标点：让它把这一句读完。
+                let next_is_end = text[end..]
+                    .chars()
+                    .next()
+                    .map(|n| matches!(n, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n'))
+                    .unwrap_or(false);
+                if next_is_end {
+                    continue;
+                }
+                return last_comma
+                    .filter(|cut| text[..*cut].chars().count() >= max_first / 2)
+                    .or(Some(end));
+            }
+            if chars >= max_first + 20 {
+                return Some(end);
+            }
+        }
+    }
+    None
+}
+
 fn is_speakable(text: &str) -> bool {
     text.chars().any(|c| c.is_alphanumeric() || is_han(c))
 }
@@ -652,11 +776,58 @@ fn is_han(c: char) -> bool {
     matches!(c, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}')
 }
 
-/// 去掉 Markdown 记号；保留标点。
+/// 去掉 Markdown 记号；把感叹号降成逗号，避免 Breeze 把短感叹合成一声吼。
 fn clean(text: &str) -> String {
-    text.chars()
+    let mut out = String::with_capacity(text.len());
+    let mut prev = '\0';
+    for c in text
+        .chars()
         .filter(|c| !matches!(c, '*' | '#' | '`' | '~' | '|' | '>' | '\r'))
-        .collect()
+    {
+        let c = match c {
+            '！' | '!' => '，',
+            _ => c,
+        };
+        if c == '，' && prev == '，' {
+            continue;
+        }
+        out.push(c);
+        prev = c;
+    }
+    out
+}
+
+/// 送 TTS 前的文本清理：感叹号全部降为逗号，结尾补句号。
+///
+/// 这是“情绪平稳”的关键：Breeze 对 `！` 非常敏感，孤立的“狸猫！”会直接
+/// 变成 400+ Hz 的一声喊；改成“狸猫，”/“狸猫。”后回到正常语调。
+pub fn sanitize_for_tts(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev = '\0';
+    for c in text.chars() {
+        let c = match c {
+            '！' | '!' => '，',
+            '\r' => continue,
+            _ => c,
+        };
+        if c == '，' && prev == '，' {
+            continue;
+        }
+        out.push(c);
+        prev = c;
+    }
+    let mut result = out.trim().to_string();
+    while result.ends_with('，') || result.ends_with(',') || result.ends_with('、') {
+        result.pop();
+    }
+    if !result.is_empty()
+        && !result.ends_with('。')
+        && !result.ends_with('？')
+        && !result.ends_with('?')
+    {
+        result.push('。');
+    }
+    result
 }
 
 /// 找到第一个合适的分句点（返回字节下标，切点在标点之后）。
@@ -772,6 +943,65 @@ mod tests {
         assert!(!out.is_empty());
         assert!(out[0].ends_with('，'));
         assert!(out[0].chars().count() >= 8);
+    }
+
+
+    #[test]
+    fn overlap_waits_for_a_full_sentence() {
+        let mut s = OverlapSplitter::new(30);
+        assert!(s.push("我刚刷到一个视频，").is_none());
+        let first = s.push("讲的是一个人。").expect("first sentence");
+        assert_eq!(first, "我刚刷到一个视频，讲的是一个人。");
+        assert!(s.push("后面还有。").is_none());
+        let rest = s.finish("我刚刷到一个视频，讲的是一个人。后面还有。").unwrap();
+        assert_eq!(rest, "后面还有。");
+    }
+
+    #[test]
+    fn overlap_caps_a_long_sentence_at_last_comma() {
+        let mut s = OverlapSplitter::new(12);
+        let first = s.push("一二三四五六七八，九十十一十二").expect("first chunk");
+        assert_eq!(first, "一二三四五六七八，");
+    }
+
+    #[test]
+    fn overlap_streaming_is_lossless() {
+        let text = "我刚刷到一个视频，讲的是一个人用三年时间把后院改成了植物园。后面还有一句。";
+        let mut s = OverlapSplitter::new(30);
+        let mut first = None;
+        for ch in text.chars() {
+            let out = s.push(&ch.to_string());
+            if first.is_none() {
+                first = out;
+            }
+        }
+        let rest = s.finish(text).unwrap();
+        assert_eq!(format!("{}{}", first.unwrap(), rest), text);
+    }
+
+    #[test]
+    fn overlap_short_reply_stays_whole() {
+        let mut s = OverlapSplitter::new(30);
+        assert!(s.push("你好。").is_none());
+        assert_eq!(s.finish("你好。").unwrap(), "你好。");
+    }
+
+    #[test]
+    fn sanitize_tames_exclamations() {
+        assert_eq!(sanitize_for_tts("狸猫！"), "狸猫。");
+        assert_eq!(sanitize_for_tts("狸猫！那种特别瘦的野猫，"), "狸猫，那种特别瘦的野猫。");
+        assert_eq!(sanitize_for_tts("太好了！！！"), "太好了。");
+        assert_eq!(sanitize_for_tts("怎么办？"), "怎么办？");
+    }
+
+    #[test]
+    fn overlap_does_not_isolate_a_short_exclamation() {
+        let mut s = OverlapSplitter::new(30);
+        assert!(s.push("狸猫！").is_none());
+        assert!(s.push("那种特别瘦的野猫，").is_none());
+        let first = s.push("眼睛特别大。").expect("first chunk");
+        assert!(first.starts_with("狸猫，"));
+        assert!(first.chars().count() > 8);
     }
 
     #[test]

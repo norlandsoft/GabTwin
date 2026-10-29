@@ -21,9 +21,19 @@
       </header>
 
       <main class="stage" id="stage">
-        <div class="hint" id="hint">按「开始聆听」，然后说话。它会在你说完后接话。</div>
-        <div class="conversation" id="conversation"></div>
-        <div class="live" id="live"></div>
+        <section class="avatar-stage" id="avatarStage" aria-label="数字人">
+          <div class="avatar-glow"></div>
+          <canvas id="avatarCanvas"></canvas>
+          <div class="avatar-caption">
+            <span class="avatar-name">园园</span>
+            <span class="avatar-mood" id="avatarMood">在这里</span>
+          </div>
+        </section>
+        <div class="transcript" id="transcript">
+          <div class="hint" id="hint">按「开始聆听」，然后说话。它会在你说完后接话。</div>
+          <div class="conversation" id="conversation"></div>
+          <div class="live" id="live"></div>
+        </div>
       </main>
 
       <footer class="dock">
@@ -67,6 +77,7 @@
         </div>
       </div>
     </div>
+    <script src="vendor/avatar.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

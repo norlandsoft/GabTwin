@@ -1,11 +1,11 @@
 use chrono::Local;
-use gabtwin_audio::{resample_linear, start_speaker_with_render, RenderTap};
+use gabtwin_audio::{resample_linear, start_speaker_with_taps, PlaybackTap, RenderTap};
 use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig, Message};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
     replay_wav, run_mic, DeviceInfo, OfflineAsrConfig, SessionConfig, SessionEvent,
 };
-use gabtwin_tts::{ClauseSplitter, GlmTts, RemoteTts, Tts, TtsConfig};
+use gabtwin_tts::{sanitize_for_tts, ClauseSplitter, GlmTts, OverlapSplitter, RemoteTts, Tts, TtsConfig};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -46,6 +46,8 @@ struct TtsState {
     tx: Mutex<Option<mpsc::Sender<TtsCommand>>>,
     generation: Arc<AtomicU64>,
     splitter: Mutex<ClauseSplitter>,
+    /// 流式首句：LLM 一边输出，先合成第一句；剩余等 LLM 结束整段合成。
+    overlap: Mutex<OverlapSplitter>,
     turn_started: Arc<Mutex<Option<Instant>>>,
     /// 播放期间置位，会话层据此屏蔽麦克风输入。
     mute: Arc<AtomicBool>,
@@ -97,6 +99,16 @@ impl TtsState {
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(30),
             )),
+            overlap: Mutex::new(OverlapSplitter::with_first_min(
+                std::env::var("GABTWIN_TTS_OVERLAP_MAX_FIRST")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(30),
+                std::env::var("GABTWIN_TTS_OVERLAP_MIN_FIRST")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(12),
+            )),
             turn_started,
             mute,
             headphones,
@@ -125,6 +137,7 @@ impl TtsState {
     fn begin_turn(&self) {
         self.stop();
         self.splitter.lock().unwrap().reset();
+        self.overlap.lock().unwrap().reset();
         *self.turn_started.lock().unwrap() = Some(Instant::now());
     }
 
@@ -138,9 +151,35 @@ impl TtsState {
         }
     }
 
+    /// 流式首句：只把切出来的第一句送 TTS，其余继续攒在 splitter 里。
+    fn feed_overlap(&self, delta: &str) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let first = self.overlap.lock().unwrap().push(delta);
+        if let Some(text) = first {
+            if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+                let _ = tx.send(TtsCommand::Clause { generation, text });
+            }
+        }
+    }
+
+    /// LLM 结束：把第一句之后的剩余文本整段送出，再 flush。
+    fn finish_overlap(&self, text: &str) {
+        let generation = self.generation.load(Ordering::SeqCst);
+        let text = sanitize_for_tts(text);
+        let rest = self.overlap.lock().unwrap().finish(&text);
+        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
+            if let Some(text) = rest {
+                let _ = tx.send(TtsCommand::Clause { generation, text });
+            }
+            let _ = tx.send(TtsCommand::Flush { generation });
+        }
+    }
+
     /// 按 LLM 的最终完整结果一次性送 TTS（默认路径）。
     fn speak(&self, text: &str) {
         let generation = self.generation.load(Ordering::SeqCst);
+        let text = sanitize_for_tts(text);
+        let text = text.as_str();
         let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
             .map(|value| value != "0")
             .unwrap_or(true);
@@ -177,7 +216,12 @@ impl TtsState {
 
     fn flush(&self) {
         let generation = self.generation.load(Ordering::SeqCst);
-        let last = self.splitter.lock().unwrap().flush();
+        let last = self
+            .splitter
+            .lock()
+            .unwrap()
+            .flush()
+            .map(|text| sanitize_for_tts(&text));
         if let Some(tx) = self.tx.lock().unwrap().as_ref() {
             if let Some(text) = last {
                 let _ = tx.send(TtsCommand::Clause { generation, text });
@@ -310,6 +354,24 @@ fn build_local_synth(app: &AppHandle) -> Option<Synth> {
     }
 }
 
+/// 数字人的 30 Hz 心跳：只读两个原子量，不碰音频回调。
+fn spawn_avatar_emitter(app: AppHandle, playback: PlaybackTap, sample_rate: u32) {
+    std::thread::spawn(move || {
+        log(format!("数字人遥测：30 Hz（输出 {sample_rate} Hz）"));
+        loop {
+            std::thread::sleep(Duration::from_millis(33));
+            let _ = app.emit(
+                "avatar-event",
+                serde_json::json!({
+                    "kind": "frame",
+                    "rms": playback.level(),
+                    "played_ms": playback.played_ms(sample_rate),
+                }),
+            );
+        }
+    });
+}
+
 fn start_tts_worker(
     app: AppHandle,
     generation: Arc<AtomicU64>,
@@ -377,7 +439,8 @@ fn start_tts_worker(
             synth.sample_rate(),
             warm.elapsed().as_millis()
         ));
-        let speaker = match start_speaker_with_render(render) {
+        let playback = PlaybackTap::new();
+        let speaker = match start_speaker_with_taps(render, playback.clone()) {
             Ok(speaker) => speaker,
             Err(err) => {
                 log(format!("音频输出不可用：{err:#}"));
@@ -388,6 +451,7 @@ fn start_tts_worker(
                 return;
             }
         };
+        spawn_avatar_emitter(app.clone(), playback, speaker.sample_rate);
         headphones.store(speaker.headphones, Ordering::SeqCst);
         let barge_in = std::env::var("GABTWIN_BARGE_IN")
             .map(|value| value == "1")
@@ -428,6 +492,10 @@ fn start_tts_worker(
                     first_push_at = None;
                     mute.store(false, Ordering::SeqCst);
                     speaking.store(false, Ordering::SeqCst);
+                    let _ = app.emit(
+                        "avatar-event",
+                        serde_json::json!({ "kind": "stop", "reason": "tts_stop" }),
+                    );
                 }
                 TtsCommand::Flush { generation: g } => {
                     if g != generation.load(Ordering::SeqCst) {
@@ -1178,6 +1246,11 @@ fn start_llm_turn(app: &AppHandle, text: String) {
     let final_tts = std::env::var("GABTWIN_TTS_FINAL")
         .map(|value| value != "0")
         .unwrap_or(true);
+    // 流式首句：LLM 一边输出，先合成第一句；剩余等 LLM 结束再整段合成。
+    let overlap_tts = final_tts
+        && std::env::var("GABTWIN_TTS_OVERLAP")
+            .map(|value| value != "0")
+            .unwrap_or(false);
     // 新一轮开始：先取消上一轮，否则旧回复的 delta 会继续喂给 TTS，
     // 两条回答在 splitter 里交错，听起来就语无伦次。
     if let Some(previous) = app.try_state::<LlmState>() {
@@ -1218,9 +1291,13 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 "llm-delta",
                 serde_json::json!({ "turn_id": turn_id, "text": delta }),
             );
-            if !final_tts && !cancel_for_feed.load(Ordering::SeqCst) {
+            if !cancel_for_feed.load(Ordering::SeqCst) {
                 if let Some(tts) = emit_target.try_state::<TtsState>() {
-                    tts.feed(delta);
+                    if overlap_tts {
+                        tts.feed_overlap(delta);
+                    } else if !final_tts {
+                        tts.feed(delta);
+                    }
                 }
             }
         });
@@ -1258,7 +1335,11 @@ fn start_llm_turn(app: &AppHandle, text: String) {
                 }
                 if let Some(tts) = app_handle.try_state::<TtsState>() {
                     if final_tts {
-                        tts.speak(&reply);
+                        if overlap_tts {
+                            tts.finish_overlap(&reply);
+                        } else {
+                            tts.speak(&reply);
+                        }
                     } else {
                         tts.flush();
                     }

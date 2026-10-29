@@ -6,7 +6,7 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 
 **状态：M0.5 分项验证阶段。** 语音输入 + 实时字幕 + 本地 Qwen2.5-7B 聊天 + 本机 TTS 已跑通
 （本地流式识别，中英；句末 SenseVoice 定稿；回复流式出字，Matcha TTS 中英混读；戴耳机可直接插话）。
-外放插话与数字人还没接。
+外放插话还没接；数字人已接 M3.0 占位角色（振幅口型 + 状态机），VRM 形象待换。
 
 ## 文档
 
@@ -19,6 +19,8 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 | [04 路线图](docs/04-roadmap.md) | M0–M4 里程碑与验收标准 |
 | [05 关键决策](docs/05-decisions.md) | ADR 与理由 |
 | [06 风险与开放问题](docs/06-risks.md) | 风险表、待验证清单 |
+| [07 人物形象](docs/07-avatar.md) | 数字人路线、口型、资产、事件协议、M3 拆分 |
+| [08 照片级真人](docs/08-photoreal-avatar.md) | 本地照片级方案、MuseTalk MLX 资源清单、M1 Max 可行性 |
 | [规划评审 2026-10](docs/reviews/2026-10-26-plan-review.md) | M0 评审意见、需先定的决定、M0' 建议 |
 | [dev/01 语音输入](docs/dev/01-voice-input.md) | 第一个分项验证：架构、模型、实测数字、限制 |
 | [dev/02 ASR 模型对照](docs/dev/02-asr-model-compare.md) | 大模型 vs small-CTC：CER、首字延迟、RTF |

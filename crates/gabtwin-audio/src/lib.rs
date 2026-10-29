@@ -13,7 +13,7 @@ use cpal::SampleFormat;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::{HeapCons, HeapRb};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -296,6 +296,83 @@ impl RenderTap {
     }
 }
 
+/// 播放遥测：口型与「它现在到底播到哪了」都从这里取。
+///
+/// 只在输出回调里写两个原子量，不分配、不加锁；UI 线程按 30 Hz 读。
+#[derive(Clone, Debug)]
+pub struct PlaybackTap {
+    played_frames: Arc<AtomicU64>,
+    /// 最近一个 10 ms 窗的 RMS，f32 位模式。
+    level: Arc<AtomicU32>,
+}
+
+impl Default for PlaybackTap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlaybackTap {
+    pub fn new() -> Self {
+        Self {
+            played_frames: Arc::new(AtomicU64::new(0)),
+            level: Arc::new(AtomicU32::new(0f32.to_bits())),
+        }
+    }
+
+    /// 输出流启动以来实际播出的帧数（含静音）。
+    pub fn played_frames(&self) -> u64 {
+        self.played_frames.load(Ordering::Relaxed)
+    }
+
+    pub fn played_ms(&self, sample_rate: u32) -> u64 {
+        if sample_rate == 0 {
+            return 0;
+        }
+        self.played_frames() * 1000 / sample_rate as u64
+    }
+
+    pub fn level(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Relaxed))
+    }
+
+    fn add_frames(&self, frames: u64) {
+        self.played_frames.fetch_add(frames, Ordering::Relaxed);
+    }
+
+    fn set_level(&self, value: f32) {
+        self.level.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// 10 ms 窗的 RMS；跨回调累计，窗口满了才发布一次。
+struct LevelMeter {
+    sum_sq: f32,
+    count: u32,
+    window: u32,
+}
+
+impl LevelMeter {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            sum_sq: 0.0,
+            count: 0,
+            window: ((sample_rate as u64 * 10 / 1000).max(1)) as u32,
+        }
+    }
+
+    fn push(&mut self, tap: &PlaybackTap, value: f32) {
+        self.sum_sq += value * value;
+        self.count += 1;
+        if self.count >= self.window {
+            let rms = (self.sum_sq / self.count as f32).sqrt();
+            tap.set_level(rms);
+            self.sum_sq = 0.0;
+            self.count = 0;
+        }
+    }
+}
+
 /// 播放句柄。真正的 cpal 输出流在自己的线程里，句柄只负责投递音频。
 pub struct SpeakerHandle {
     tx: mpsc::Sender<SpeakerCommand>,
@@ -305,6 +382,8 @@ pub struct SpeakerHandle {
     pub headphones: bool,
     /// 实际播出的参考信号，供 AEC 使用。
     pub render: RenderTap,
+    /// 实际播出的帧数与电平，供数字人口型使用。
+    pub playback: PlaybackTap,
 }
 
 impl SpeakerHandle {
@@ -325,14 +404,24 @@ pub fn start_speaker() -> Result<SpeakerHandle> {
 }
 
 pub fn start_speaker_with_render(render: RenderTap) -> Result<SpeakerHandle> {
+    start_speaker_with_taps(render, PlaybackTap::new())
+}
+
+pub fn start_speaker_with_taps(render: RenderTap, playback: PlaybackTap) -> Result<SpeakerHandle> {
     let render_for_stream = render.clone();
+    let playback_for_stream = playback.clone();
     let (tx, rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let clear = Arc::new(AtomicBool::new(false));
     let clear_for_thread = clear.clone();
     std::thread::spawn(move || {
         let (mut producer, consumer) = HeapRb::<f32>::new(SPEAKER_RING_SAMPLES).split();
-        match build_output_stream(consumer, clear_for_thread.clone(), render_for_stream.clone()) {
+        match build_output_stream(
+            consumer,
+            clear_for_thread.clone(),
+            render_for_stream.clone(),
+            playback_for_stream,
+        ) {
             Ok((stream, rate, headphones)) => {
                 let _ = ready_tx.send(Ok((rate, headphones)));
                 while let Ok(command) = rx.recv() {
@@ -367,6 +456,7 @@ pub fn start_speaker_with_render(render: RenderTap) -> Result<SpeakerHandle> {
             sample_rate: rate,
             headphones,
             render,
+            playback,
         }),
         Ok(Err(message)) => Err(anyhow!(message)),
         Err(_) => Err(anyhow!("启动音频输出超时")),
@@ -377,6 +467,7 @@ fn build_output_stream(
     consumer: HeapCons<f32>,
     clear: Arc<AtomicBool>,
     render: RenderTap,
+    playback: PlaybackTap,
 ) -> Result<(cpal::Stream, u32, bool), anyhow::Error> {
     let host = cpal::default_host();
     let device = host
@@ -410,11 +501,16 @@ fn build_output_stream(
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
             let render = render.clone();
+            let playback = playback.clone();
+            let mut meter = LevelMeter::new(rate);
             let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
                 move |data: &mut [f32], _| {
-                    fill_f32(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                    fill_f32(
+                        data, channels, &mut cons, &clear, &render, &playback, &mut meter,
+                        &mut phase, ratio,
+                    )
                 },
                 err_fn,
                 None,
@@ -424,11 +520,16 @@ fn build_output_stream(
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
             let render = render.clone();
+            let playback = playback.clone();
+            let mut meter = LevelMeter::new(rate);
             let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
                 move |data: &mut [i16], _| {
-                    fill_i16(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                    fill_i16(
+                        data, channels, &mut cons, &clear, &render, &playback, &mut meter,
+                        &mut phase, ratio,
+                    )
                 },
                 err_fn,
                 None,
@@ -438,11 +539,16 @@ fn build_output_stream(
             let mut cons = consumer.take().expect("consumer");
             let clear = clear.clone();
             let render = render.clone();
+            let playback = playback.clone();
+            let mut meter = LevelMeter::new(rate);
             let mut phase = 0.0f64;
             device.build_output_stream(
                 config.clone(),
                 move |data: &mut [u16], _| {
-                    fill_u16(data, channels, &mut cons, &clear, &render, &mut phase, ratio)
+                    fill_u16(
+                        data, channels, &mut cons, &clear, &render, &playback, &mut meter,
+                        &mut phase, ratio,
+                    )
                 },
                 err_fn,
                 None,
@@ -467,6 +573,8 @@ fn fill_f32(
     consumer: &mut HeapCons<f32>,
     clear: &AtomicBool,
     render: &RenderTap,
+    playback: &PlaybackTap,
+    meter: &mut LevelMeter,
     phase: &mut f64,
     ratio: f64,
 ) {
@@ -476,6 +584,7 @@ fn fill_f32(
     let frames = data.len() / channels;
     for i in 0..frames {
         let value = next_sample(consumer, clear);
+        meter.push(playback, value);
         for c in 0..channels {
             data[i * channels + c] = value;
         }
@@ -485,6 +594,7 @@ fn fill_f32(
             render.push(value);
         }
     }
+    playback.add_frames(frames as u64);
 }
 
 fn fill_i16(
@@ -493,6 +603,8 @@ fn fill_i16(
     consumer: &mut HeapCons<f32>,
     clear: &AtomicBool,
     render: &RenderTap,
+    playback: &PlaybackTap,
+    meter: &mut LevelMeter,
     phase: &mut f64,
     ratio: f64,
 ) {
@@ -502,6 +614,7 @@ fn fill_i16(
     let frames = data.len() / channels;
     for i in 0..frames {
         let value = next_sample(consumer, clear);
+        meter.push(playback, value);
         let sample = (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         for c in 0..channels {
             data[i * channels + c] = sample;
@@ -512,6 +625,7 @@ fn fill_i16(
             render.push(value);
         }
     }
+    playback.add_frames(frames as u64);
 }
 
 fn fill_u16(
@@ -520,6 +634,8 @@ fn fill_u16(
     consumer: &mut HeapCons<f32>,
     clear: &AtomicBool,
     render: &RenderTap,
+    playback: &PlaybackTap,
+    meter: &mut LevelMeter,
     phase: &mut f64,
     ratio: f64,
 ) {
@@ -529,6 +645,7 @@ fn fill_u16(
     let frames = data.len() / channels;
     for i in 0..frames {
         let value = next_sample(consumer, clear);
+        meter.push(playback, value);
         let sample = (((value.clamp(-1.0, 1.0) * 0.5) + 0.5) * u16::MAX as f32) as u16;
         for c in 0..channels {
             data[i * channels + c] = sample;
@@ -539,6 +656,7 @@ fn fill_u16(
             render.push(value);
         }
     }
+    playback.add_frames(frames as u64);
 }
 
 /// 线性重采样（TTS 24k → 设备 48k 这类）。语音够用，不做抗混叠。
@@ -558,4 +676,28 @@ pub fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
         out.push(a + (b - a) * frac);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_tap_publishes_level_and_clock() {
+        let tap = PlaybackTap::new();
+        let mut meter = LevelMeter {
+            sum_sq: 0.0,
+            count: 0,
+            window: 4,
+        };
+        for _ in 0..4 {
+            meter.push(&tap, 0.5);
+        }
+        assert!((tap.level() - 0.5).abs() < 1e-6);
+
+        tap.add_frames(480);
+        assert_eq!(tap.played_frames(), 480);
+        assert_eq!(tap.played_ms(48_000), 10);
+        assert_eq!(tap.played_ms(0), 0);
+    }
 }
