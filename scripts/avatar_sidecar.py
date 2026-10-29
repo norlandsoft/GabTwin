@@ -50,7 +50,7 @@ BOXES = [
     (12.0, 273, 216, 329, 329),
 ]
 
-STATE: dict = {"generating": False}
+STATE: dict = {"generating": False, "cancel": False}
 CLIENTS: set[web.WebSocketResponse] = set()
 PIPE: MuseTalkPipeline | None = None
 FRAMES: list[np.ndarray] = []
@@ -123,34 +123,58 @@ def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.
     return out
 
 
-def render_clip(wav: Path) -> list[bytes]:
-    assert PIPE is not None and BG is not None
-    chunks = PIPE.encode_audio_from_wav(str(wav), fps=FPS)
-    mx.eval(chunks)
-    n = chunks.shape[0]
-    print(f"audio chunks: {n} @ {FPS} fps", flush=True)
-
-    # 10 fps 输出：每帧取源视频 25 fps 的对应帧（循环）
-    base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
-    lat_stack = mx.concatenate([LATENTS[i] for i in base_idx], axis=0)
-    t0 = time.time()
-    faces = PIPE.run_batched(lat_stack, chunks[:n], batch_size=6)
-    print(f"generated {len(faces)} faces in {time.time()-t0:.1f}s", flush=True)
-
+def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> bytes | None:
+    assert BG is not None
+    src = paste(src, face, box)
+    wide = BG.copy()
     fh = OUT_H
-    fw = int(round(FRAMES[0].shape[1] * fh / FRAMES[0].shape[0]))
+    fw = int(round(src.shape[1] * fh / src.shape[0]))
     fx = (OUT_W - fw) // 2
-    jpgs: list[bytes] = []
-    for i in range(n):
-        src = paste(FRAMES[base_idx[i]], faces[i], BOXES_PER_FRAME[base_idx[i]])
-        wide = BG.copy()
-        fg = cv2.resize(src, (fw, fh), interpolation=cv2.INTER_LANCZOS4)
-        wide[:, fx:fx + fw] = fg
-        ok, buf = cv2.imencode(".jpg", wide, [cv2.IMWRITE_JPEG_QUALITY, 86])
-        if ok:
-            jpgs.append(buf.tobytes())
-    print(f"composed {len(jpgs)} JPEG frames", flush=True)
-    return jpgs
+    fg = cv2.resize(src, (fw, fh), interpolation=cv2.INTER_LANCZOS4)
+    wide[:, fx:fx + fw] = fg
+    ok, buf = cv2.imencode(".jpg", wide, [cv2.IMWRITE_JPEG_QUALITY, 86])
+    return buf.tobytes() if ok else None
+
+
+async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) -> None:
+    """生成一个 clause 的帧，边生成边通过 WebSocket 发出去。"""
+    assert PIPE is not None
+    STATE["generating"] = True
+    STATE["cancel"] = False
+    try:
+        chunks = PIPE.encode_audio_from_wav(str(wav), fps=FPS)
+        mx.eval(chunks)
+        n = chunks.shape[0]
+        print(f"clause {clause_id}: {n} chunks @ {FPS} fps", flush=True)
+        await broadcast_json({
+            "type": "clause",
+            "clause_id": clause_id,
+            "fps": FPS,
+            "count": n,
+            "audio": audio_url,
+        })
+        # 10 fps 输出：每帧取源视频 25 fps 的对应帧（循环）
+        base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
+        for start in range(0, n, 4):
+            if STATE["cancel"]:
+                break
+            end = min(n, start + 4)
+            lat_stack = mx.concatenate([LATENTS[base_idx[i]] for i in range(start, end)], axis=0)
+            faces = PIPE.run_batched(lat_stack, chunks[start:end], batch_size=4)
+            for j in range(start, end):
+                jpg = compose_frame(FRAMES[base_idx[j]], faces[j - start], BOXES_PER_FRAME[base_idx[j]])
+                if jpg:
+                    await broadcast_bytes(struct.pack(">I", int(round(j * 1000 / FPS))) + jpg)
+            await asyncio.sleep(0)
+        if STATE["cancel"]:
+            await broadcast_json({"type": "stopped", "clause_id": clause_id})
+        else:
+            await broadcast_json({"type": "done", "clause_id": clause_id, "count": n})
+    except Exception as error:  # noqa: BLE001
+        print(f"clause failed: {error}", flush=True)
+        await broadcast_json({"type": "error", "message": str(error)})
+    finally:
+        STATE["generating"] = False
 
 
 async def broadcast_json(payload: dict) -> None:
@@ -170,23 +194,8 @@ async def broadcast_bytes(payload: bytes) -> None:
 
 
 async def run_preview() -> None:
-    STATE["generating"] = True
-    try:
-        assert PREVIEW_WAV is not None
-        # MLX 的 GPU stream 是线程本地的：模型在主线程加载，渲染也必须留在主线程。
-        # 预览阶段阻塞事件循环可以接受；实时流式版本会改成专用渲染线程。
-        jpgs = render_clip(PREVIEW_WAV)
-        await broadcast_json({"type": "clip", "fps": FPS, "count": len(jpgs), "audio": "/audio/preview.wav"})
-        for i, jpg in enumerate(jpgs):
-            pts = int(round(i * 1000 / FPS))
-            await broadcast_bytes(struct.pack(">I", pts) + jpg)
-            await asyncio.sleep(0)  # 让出事件循环
-        await broadcast_json({"type": "done", "count": len(jpgs)})
-    except Exception as error:  # noqa: BLE001
-        print(f"preview failed: {error}", flush=True)
-        await broadcast_json({"type": "error", "message": str(error)})
-    finally:
-        STATE["generating"] = False
+    assert PREVIEW_WAV is not None
+    await run_clause(PREVIEW_WAV, "preview", "/audio/preview.wav")
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
@@ -208,6 +217,26 @@ async def preview_handler(request: web.Request) -> web.Response:
         return web.json_response({"status": "busy"}, status=409)
     asyncio.create_task(run_preview())
     return web.json_response({"status": "started", "fps": FPS})
+
+
+async def speak_handler(request: web.Request) -> web.Response:
+    if STATE["generating"]:
+        return web.json_response({"status": "busy"}, status=409)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"status": "bad-json"}, status=400)
+    wav = Path(str(data.get("wav", "")))
+    if not wav.is_file():
+        return web.json_response({"status": "missing-wav"}, status=400)
+    clause_id = str(data.get("clause_id") or f"clause-{time.time():.3f}")
+    asyncio.create_task(run_clause(wav, clause_id))
+    return web.json_response({"status": "started", "clause_id": clause_id, "fps": FPS})
+
+
+async def stop_handler(request: web.Request) -> web.Response:
+    STATE["cancel"] = True
+    return web.json_response({"status": "stopping"})
 
 
 async def health_handler(request: web.Request) -> web.Response:
@@ -259,6 +288,8 @@ def main() -> None:
         web.get("/ws", ws_handler),
         web.get("/audio/preview.wav", audio_handler),
         web.post("/preview", preview_handler),
+        web.post("/speak", speak_handler),
+        web.post("/stop", stop_handler),
     ])
     print(f"avatar sidecar on http://127.0.0.1:{args.port} (ws /ws)", flush=True)
     web.run_app(app, host="127.0.0.1", port=args.port, print=None)

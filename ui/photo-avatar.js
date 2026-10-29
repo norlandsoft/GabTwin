@@ -1,6 +1,6 @@
-// 照片级数字人预览：连接本地 sidecar（scripts/avatar_sidecar.py），
-// 接收 10 fps JPEG 帧，和 /audio/preview.wav 一起播放。
-// 这是 A 方案的渲染/传输验证；实时 TTS 流式推理下一步接。
+// 照片级数字人：连接本地 sidecar（scripts/avatar_sidecar.py），
+// 边生成边接收 10 fps JPEG 帧。预览用 /audio/preview.wav 与帧一起播放；
+// 实时 TTS 流式接入时，音频由 Rust 播放，UI 只按 avatar-speech-start 的时钟取帧。
 (() => {
   const state = {
     ws: null,
@@ -9,9 +9,13 @@
     playing: false,
     fps: 10,
     frames: [],
+    clause: null,
+    audioUrl: null,
     audio: null,
     raf: 0,
     lastIndex: -1,
+    started: false,
+    done: false,
     retry: 0,
   };
 
@@ -36,8 +40,9 @@
     if (avatar) avatar.visible = !on;
   }
 
-  function stopPlayback() {
+  function stopPlayback({ restore = false } = {}) {
     state.playing = false;
+    state.started = false;
     if (state.raf) cancelAnimationFrame(state.raf);
     state.raf = 0;
     if (state.audio) {
@@ -45,20 +50,23 @@
       state.audio.currentTime = 0;
       state.audio = null;
     }
+    if (restore) setMode(false);
+  }
+
+  function showFrame(idx) {
+    if (!state.frames.length) return;
+    const i = Math.max(0, Math.min(state.frames.length - 1, idx));
+    if (i === state.lastIndex) return;
+    state.lastIndex = i;
+    const el = img();
+    if (el) el.src = state.frames[i].url;
   }
 
   function tick() {
     if (!state.playing || !state.audio) return;
-    const idx = Math.min(
-      state.frames.length - 1,
-      Math.floor(state.audio.currentTime * state.fps)
-    );
-    if (idx !== state.lastIndex && state.frames[idx]) {
-      state.lastIndex = idx;
-      const el = img();
-      if (el) el.src = state.frames[idx].url;
-    }
-    if (state.audio.ended || idx >= state.frames.length - 1) {
+    const raw = Math.floor(state.audio.currentTime * state.fps);
+    showFrame(raw);
+    if (state.audio.ended) {
       state.playing = false;
       status("预览结束");
       return;
@@ -66,18 +74,15 @@
     state.raf = requestAnimationFrame(tick);
   }
 
-  async function playClip(clip) {
-    if (!state.frames.length) {
-      status("没有收到画面");
-      return;
-    }
+  async function startAudio() {
+    if (!state.audioUrl || state.playing || !state.frames.length) return;
+    stopPlayback();
     setMode(true);
-    state.fps = clip.fps || 10;
-    const first = img();
-    if (first) first.src = state.frames[0].url;
-    const audio = new Audio(clip.audio || "http://127.0.0.1:8811/audio/preview.wav");
+    showFrame(0);
+    const audio = new Audio(state.audioUrl);
     audio.preload = "auto";
     state.audio = audio;
+    state.started = true;
     state.playing = true;
     state.lastIndex = -1;
     status("播放样片");
@@ -86,8 +91,15 @@
       state.raf = requestAnimationFrame(tick);
     } catch (err) {
       state.playing = false;
-      status("浏览器拦截了音频，请再点一次");
+      state.started = true; // 不要每来一帧就重试；等用户再点预览
+      status("点一下播放（浏览器需要用户手势）");
       console.warn("[photo] audio play failed", err);
+    }
+  }
+
+  function maybeStart() {
+    if (state.audioUrl && !state.started && state.frames.length >= 3) {
+      startAudio();
     }
   }
 
@@ -108,16 +120,29 @@
         }
         return;
       }
-      if (msg.type === "clip") {
+      if (msg.type === "clause") {
+        stopPlayback();
         clearFrames();
+        state.clause = msg;
         state.generating = true;
-        state.clip = msg;
+        state.done = false;
+        state.audioUrl = msg.audio || null;
+        state.fps = msg.fps || 10;
+        state.started = false;
         status(`生成中… ${msg.count} 帧`);
         return;
       }
       if (msg.type === "done") {
         state.generating = false;
-        playClip(state.clip || { fps: 10 });
+        state.done = true;
+        maybeStart();
+        if (!state.audioUrl && state.frames.length) showFrame(0);
+        return;
+      }
+      if (msg.type === "stopped") {
+        state.generating = false;
+        stopPlayback();
+        status("已停止");
         return;
       }
       if (msg.type === "error") {
@@ -128,12 +153,11 @@
       return;
     }
     if (event.data instanceof ArrayBuffer) {
-      const view = new DataView(event.data);
       if (event.data.byteLength < 5) return;
-      const pts = view.getUint32(0);
+      const view = new DataView(event.data);
       const blob = new Blob([event.data.slice(4)], { type: "image/jpeg" });
-      const url = URL.createObjectURL(blob);
-      state.frames.push({ pts, url });
+      state.frames.push({ pts: view.getUint32(0), url: URL.createObjectURL(blob) });
+      maybeStart();
     }
   }
 
@@ -167,7 +191,6 @@
   }
 
   function unlockAudio() {
-    // 用户点击时先放一个静音片段，避免 15 秒生成后被自动播放策略拦截。
     try {
       const a = new Audio(
         "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAABErAAABAAgAZGF0YQAAAAA="
@@ -183,17 +206,17 @@
       return;
     }
     if (state.generating || state.playing) return;
-    // 已经生成过：直接重播缓存，不重新跑 15 秒推理。
-    if (state.frames.length && state.clip) {
+    // 已经生成过：直接重播缓存，不重新跑推理。
+    if (state.frames.length && state.audioUrl) {
       unlockAudio();
-      playClip(state.clip);
+      startAudio();
       return;
     }
     unlockAudio();
     state.generating = true;
     const btn = button();
     if (btn) btn.disabled = true;
-    status("生成中…（首次约 10–20 秒）");
+    status("生成中…（本地 256²，10 fps）");
     try {
       const resp = await fetch("http://127.0.0.1:8811/preview", { method: "POST" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -211,5 +234,12 @@
     connect();
   }
 
-  window.GabTwinPhoto = { init, preview, stop: stopPlayback, isConnected: () => state.connected };
+  window.GabTwinPhoto = {
+    init,
+    preview,
+    stop: stopPlayback,
+    startAudio,
+    isConnected: () => state.connected,
+    get frames() { return state.frames.length; },
+  };
 })();

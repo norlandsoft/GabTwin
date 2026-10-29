@@ -196,7 +196,10 @@ M1 Max 的 24 核 GPU 比 M5 Max 弱不少；下面所有 fps 都是**待实测�
 - 后台有其他 GPU 消费者（Chrome、Spotlight 索引等）时数字会掉一半；正式验收要清场复测。
 - 本机样本：`workspace/avatar/sample-3s.mp4`（1280×720，宽幅 + 模糊填充；仅本地自用）。
 - 应用内预览：`scripts/avatar-sidecar-start.sh` 启动 sidecar，应用底部「照片级预览」按钮
-  用固定 3 秒样音播放 10 fps 画面。**实时 TTS 流式推理还没接**，这是下一步。
+  用固定 3 秒样音播放 10 fps 画面。sidecar 每 4 帧推一次，首帧到得比整段快；
+  swap 严重时实测首帧约 2.3 s、30 帧约 9.9 s，干净环境应明显更快。
+- **实时 TTS 流式推理还没接**：sidecar 已有 `/speak`（WAV → 流式帧），下一步在 Rust
+  TTS worker 里缓冲 clause、POST `/speak`、等 lead 后再播放，并给 UI 发 `avatar-speech-start`。
 
 ### 画质边界
 
