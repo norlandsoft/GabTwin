@@ -105,9 +105,6 @@ def prepare(frames_dir: Path) -> None:
 def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.ndarray:
     x0, y0, s = box
     gen = cv2.resize(face, (s, s), interpolation=cv2.INTER_LANCZOS4)
-    # 轻度锐化，抵消 256² VAE 的柔化；只作用在下半脸。
-    blur = cv2.GaussianBlur(gen, (0, 0), 1.0)
-    gen = cv2.addWeighted(gen, 1.55, blur, -0.55, 0)
     # 只替换下半脸（嘴/下巴/下颌），保留源视频里更锐的眼睛、鼻子和脸颊。
     # 整块贴回会把整个脸换成生成图，眼睛也会一起变糊——这是之前“嘴和脸都糊”的主因。
     mask = np.zeros((s, s), np.float32)
@@ -125,8 +122,24 @@ def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.
 
 
 def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> bytes | None:
-    src = paste(src, face, box)
+    # 先把源帧缩到输出分辨率，再把 256² 生成脸直接贴到输出坐标：
+    # 只重采样一次，避免 256 -> 386 -> 540 的双重柔化。
+    scale = OUT_W / src.shape[1]
     portrait = cv2.resize(src, (OUT_W, OUT_H), interpolation=cv2.INTER_LANCZOS4)
+    x0, y0, s = box
+    x0 = max(0, min(OUT_W - 1, int(round(x0 * scale))))
+    y0 = max(0, min(OUT_H - 1, int(round(y0 * scale))))
+    s = max(8, min(min(OUT_W - x0, OUT_H - y0), int(round(s * scale))))
+    portrait = paste(portrait, face, (x0, y0, s))
+    # 输出分辨率下做一次轻度锐化，只动下半脸，避免全图发硬。
+    roi = portrait[y0:y0 + s, x0:x0 + s]
+    if roi.size:
+        blur = cv2.GaussianBlur(roi, (0, 0), 1.0)
+        sharp = cv2.addWeighted(roi, 1.35, blur, -0.35, 0)
+        mask = np.zeros((s, s), np.float32)
+        cv2.ellipse(mask, (int(s * 0.50), int(s * 0.68)), (int(s * 0.32), int(s * 0.21)), 0, 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
+        portrait[y0:y0 + s, x0:x0 + s] = np.clip(sharp * mask + roi * (1 - mask), 0, 255).astype(np.uint8)
     ok, buf = cv2.imencode(".jpg", portrait, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buf.tobytes() if ok else None
 
