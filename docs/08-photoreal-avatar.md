@@ -264,16 +264,15 @@ M1 Max 的 24 核 GPU 比 M5 Max 弱不少；下面所有 fps 都是**待实测�
 - Mac 上跑通的照片级参考（M5 Max 128GB、640×480 20 fps、ANE+GPU）：<https://github.com/liwagu/distillCKirk>
 - DWPose 权重（Apache-2.0）：<https://huggingface.co/yzd-v/DWPose>
 
-## 4. GFPGAN 质量模式（2026-10-30 实测）
+## 4. GFPGAN 质量模式（可选，非默认）
 
 MuseTalk 256² 的嘴部上限，用 GFPGAN v1.4（PyTorch/MPS）修生成脸：
 
 - 输入 256² 生成脸 → 输出 512²，只把修复后的下半脸贴回；
 - 单帧修复约 **0.27 s**；sidecar 集成后 30 帧预览约 **28 s**（约 1 fps，含 MuseTalk 与内存压力）；
 - 视觉上唇线、牙齿、皮肤明显清楚；脸会略“美颜”，身份有轻微漂移；
-- 默认 `GABTWIN_AVATAR_RESTORE=all`（嘴清楚优先）：预览和实时都修复；Rust 会等 sidecar
-  把整段帧生成完再播音频，实测 1 秒句首音约 **23.5 s**，30 帧预览约 **25 s**；
-- `GABTWIN_AVATAR_RESTORE=preview`：预览修复、实时仍 10 fps 的 256²；
+- 质量模式显式开启：`GABTWIN_AVATAR_UNIFORM=0 GABTWIN_AVATAR_RESTORE=all`；Rust 会等
+  sidecar 把整段帧生成完再播音频，实测 1 秒句首音约 **23.5 s**，30 帧预览约 **25 s**；
 - 需要 `.venv-cosy` 里的 torch/gfpgan/facexlib 和 `models/avatar/gfpgan/GFPGANv1.4.pth`（348 MB，本地）。
 
 启动质量预览：
@@ -284,3 +283,23 @@ MuseTalk 256² 的嘴部上限，用 GFPGAN v1.4（PyTorch/MPS）修生成脸：
 ./scripts/avatar-preview.sh
 ```
 
+
+## 5. 统一清晰度模式（当前默认）
+
+目标不是“更清楚”，而是“没有拼接感”：
+
+- **整张脸一起贴回**（不是只贴下半脸），眼睛、鼻子、嘴、脸颊同源；
+- sidecar 输出降到 **432×576（3:4）**；
+- 合成后对**整帧**做同一层 Gaussian 柔化（`GABTWIN_AVATAR_SOFTEN`，默认 1.35）；
+- 默认 **不启用 GFPGAN**，避免“嘴清楚、眼睛/脸颊另一种质感”；
+- 30 帧预览约 **9.4 s**（当前 swap 下约 3 fps）；Rust/UI 可以等整段帧生成完再播，
+  也可以按 lead 直接播。
+
+```bash
+# 默认：统一柔化
+./scripts/avatar-sidecar-start.sh
+./scripts/avatar-preview.sh
+
+# 想要之前的清晰嘴（可选）
+GABTWIN_AVATAR_UNIFORM=0 GABTWIN_AVATAR_RESTORE=all ./scripts/avatar-sidecar-start.sh
+```

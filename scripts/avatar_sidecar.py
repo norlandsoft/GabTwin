@@ -39,8 +39,11 @@ from musetalk_mlx.pipeline_mlx import MuseTalkPipeline  # noqa: E402
 import mlx.core as mx  # noqa: E402
 
 FPS = 10
-OUT_W, OUT_H = 540, 720
+OUT_W, OUT_H = 432, 576
 FACE = 256
+# 统一清晰度模式：整张脸一起贴回，再对整帧做同样的柔化；默认开启。
+UNIFORM = os.environ.get("GABTWIN_AVATAR_UNIFORM", "1").strip().lower() not in ("0", "off", "false", "no")
+SOFTEN = float(os.environ.get("GABTWIN_AVATAR_SOFTEN", "1.35"))
 RESTORE_MODE = os.environ.get("GABTWIN_AVATAR_RESTORE", "0").strip().lower()
 RESTORE_PREVIEW = RESTORE_MODE in ("1", "all", "preview", "true", "yes")
 RESTORE_ALL = RESTORE_MODE in ("1", "all", "true", "yes")
@@ -112,16 +115,25 @@ def prepare(frames_dir: Path) -> None:
 def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.ndarray:
     x0, y0, s = box
     gen = cv2.resize(face, (s, s), interpolation=cv2.INTER_LANCZOS4)
-    # 只替换下半脸（嘴/下巴/下颌），保留源视频里更锐的眼睛、鼻子和脸颊。
-    # 整块贴回会把整个脸换成生成图，眼睛也会一起变糊——这是之前“嘴和脸都糊”的主因。
     mask = np.zeros((s, s), np.float32)
-    cv2.ellipse(
-        mask,
-        (int(s * 0.50), int(s * 0.68)),
-        (int(s * 0.32), int(s * 0.21)),
-        0, 0, 360, 1.0, -1,
-    )
-    mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
+    if UNIFORM:
+        # 整张脸一起贴回：眼睛、鼻子、嘴、脸颊同源同清晰度，不在下半脸留拼接边。
+        cv2.ellipse(
+            mask,
+            (int(s * 0.50), int(s * 0.47)),
+            (int(s * 0.36), int(s * 0.47)),
+            0, 0, 360, 1.0, -1,
+        )
+        mask = cv2.GaussianBlur(mask, (0, 0), max(8.0, s * 0.08))[..., None]
+    else:
+        # 质量模式：只替换下半脸，保留源视频更锐的眼睛、鼻子和脸颊。
+        cv2.ellipse(
+            mask,
+            (int(s * 0.50), int(s * 0.68)),
+            (int(s * 0.32), int(s * 0.21)),
+            0, 0, 360, 1.0, -1,
+        )
+        mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
     region = frame[y0:y0 + s, x0:x0 + s].astype(np.float32)
     out = frame.copy()
     out[y0:y0 + s, x0:x0 + s] = np.clip(gen.astype(np.float32) * mask + region * (1 - mask), 0, 255).astype(np.uint8)
@@ -147,7 +159,10 @@ def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) 
         cv2.ellipse(mask, (int(s * 0.50), int(s * 0.68)), (int(s * 0.32), int(s * 0.21)), 0, 0, 360, 1.0, -1)
         mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
         portrait[y0:y0 + s, x0:x0 + s] = np.clip(sharp * mask + roi * (1 - mask), 0, 255).astype(np.uint8)
-    ok, buf = cv2.imencode(".jpg", portrait, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if UNIFORM and SOFTEN > 0:
+        # 整帧同一层柔化：源视频的清晰脸和生成的下半脸被拉到同一清晰度。
+        portrait = cv2.GaussianBlur(portrait, (0, 0), SOFTEN)
+    ok, buf = cv2.imencode(".jpg", portrait, [cv2.IMWRITE_JPEG_QUALITY, 92])
     return buf.tobytes() if ok else None
 
 
@@ -194,7 +209,7 @@ async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) ->
         # 10 fps 输出：每帧取源视频 25 fps 的对应帧（循环）
         base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
         # preview 默认修复；实时 /speak 默认不修复，避免 10 fps 掉到 1 fps。
-        use_restore = RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None)
+        use_restore = (not UNIFORM) and (RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None))
         if use_restore:
             # 先把整段 256 脸生成完，再统一走 GFPGAN；不要 MLX/Torch 交替抢显存。
             faces_all = []

@@ -10,7 +10,13 @@ PORT="${GABTWIN_AVATAR_PORT:-8811}"
 PID_FILE="$GABTWIN_HOME/avatar-sidecar.pid"
 LOG="$GABTWIN_HOME/logs/avatar-sidecar.log"
 
-RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-all}"
+UNIFORM_MODE="${GABTWIN_AVATAR_UNIFORM:-1}"
+export GABTWIN_AVATAR_UNIFORM="$UNIFORM_MODE"
+if [[ "$UNIFORM_MODE" == "1" || "$UNIFORM_MODE" == "on" || "$UNIFORM_MODE" == "true" ]]; then
+  RESTORE_MODE=0
+else
+  RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-all}"
+fi
 export GABTWIN_AVATAR_RESTORE="$RESTORE_MODE"
 if [[ "$RESTORE_MODE" != "0" && "$RESTORE_MODE" != "off" && "$RESTORE_MODE" != "false" ]]; then
   "$ROOT/scripts/gfpgan-restore-start.sh"
