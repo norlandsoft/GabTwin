@@ -511,6 +511,7 @@ if (!invoke) {
   listen("llm-error", (e) => onLlmError(e.payload || {}));
   listen("llm-cancelled", (e) => onLlmCancelled(e.payload || {}));
   listen("tts-start", (e) => onTtsStart(e.payload || {}));
+  listen("avatar-speech-start", () => window.GabTwinPhoto?.startLive());
   listen("tts-queued", (e) => onTtsQueued(e.payload || {}));
   listen("tts-error", (e) => {
     const message = (e.payload || {}).message || "TTS 不可用";

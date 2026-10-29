@@ -10,7 +10,8 @@ PORT="${GABTWIN_AVATAR_PORT:-8811}"
 PID_FILE="$GABTWIN_HOME/avatar-sidecar.pid"
 LOG="$GABTWIN_HOME/logs/avatar-sidecar.log"
 
-RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-0}"
+RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-all}"
+export GABTWIN_AVATAR_RESTORE="$RESTORE_MODE"
 if [[ "$RESTORE_MODE" != "0" && "$RESTORE_MODE" != "off" && "$RESTORE_MODE" != "false" ]]; then
   "$ROOT/scripts/gfpgan-restore-start.sh"
 fi
@@ -46,12 +47,7 @@ pid=$!
 echo "$pid" >"$PID_FILE"
 echo "启动 avatar sidecar pid=${pid}，等待模型…"
 for _ in $(seq 1 90); do
-  RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-0}"
-if [[ "$RESTORE_MODE" != "0" && "$RESTORE_MODE" != "off" && "$RESTORE_MODE" != "false" ]]; then
-  "$ROOT/scripts/gfpgan-restore-start.sh"
-fi
-
-if curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  if curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
     echo "就绪：http://127.0.0.1:${PORT}"
     echo "日志：$LOG"
     exit 0

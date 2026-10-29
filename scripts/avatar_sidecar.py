@@ -195,18 +195,35 @@ async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) ->
         base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
         # preview 默认修复；实时 /speak 默认不修复，避免 10 fps 掉到 1 fps。
         use_restore = RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None)
-        for start in range(0, n, 4):
-            if STATE["cancel"]:
-                break
-            end = min(n, start + 4)
-            lat_stack = mx.concatenate([LATENTS[base_idx[i]] for i in range(start, end)], axis=0)
-            faces = PIPE.run_batched(lat_stack, chunks[start:end], batch_size=4)
-            for j in range(start, end):
-                face = restore_face(faces[j - start]) if use_restore else faces[j - start]
+        if use_restore:
+            # 先把整段 256 脸生成完，再统一走 GFPGAN；不要 MLX/Torch 交替抢显存。
+            faces_all = []
+            for start in range(0, n, 4):
+                if STATE["cancel"]:
+                    break
+                end = min(n, start + 4)
+                lat_stack = mx.concatenate([LATENTS[base_idx[i]] for i in range(start, end)], axis=0)
+                faces_all.extend(PIPE.run_batched(lat_stack, chunks[start:end], batch_size=4))
+            for j, face in enumerate(faces_all):
+                if STATE["cancel"]:
+                    break
+                face = restore_face(face)
                 jpg = compose_frame(FRAMES[base_idx[j]], face, BOXES_PER_FRAME[base_idx[j]])
                 if jpg:
                     await broadcast_bytes(struct.pack(">I", int(round(j * 1000 / FPS))) + jpg)
-            await asyncio.sleep(0)
+                await asyncio.sleep(0)
+        else:
+            for start in range(0, n, 4):
+                if STATE["cancel"]:
+                    break
+                end = min(n, start + 4)
+                lat_stack = mx.concatenate([LATENTS[base_idx[i]] for i in range(start, end)], axis=0)
+                faces = PIPE.run_batched(lat_stack, chunks[start:end], batch_size=4)
+                for j in range(start, end):
+                    jpg = compose_frame(FRAMES[base_idx[j]], faces[j - start], BOXES_PER_FRAME[base_idx[j]])
+                    if jpg:
+                        await broadcast_bytes(struct.pack(">I", int(round(j * 1000 / FPS))) + jpg)
+                await asyncio.sleep(0)
         if STATE["cancel"]:
             await broadcast_json({"type": "stopped", "clause_id": clause_id})
         else:

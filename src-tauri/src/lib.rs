@@ -378,6 +378,7 @@ struct AvatarClient {
     client: reqwest::blocking::Client,
     url: String,
     lead_ms: u64,
+    wait_frames: bool,
     seq: u64,
 }
 
@@ -396,8 +397,16 @@ impl AvatarClient {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(1200);
-        log(format!("照片级数字人：{url}（lead {lead_ms} ms）"));
-        Some(Self { client, url, lead_ms, seq: 0 })
+        let restore = std::env::var("GABTWIN_AVATAR_RESTORE")
+            .unwrap_or_default()
+            .to_lowercase();
+        let wait_frames = std::env::var("GABTWIN_AVATAR_WAIT")
+            .map(|value| value != "0")
+            .unwrap_or_else(|_| matches!(restore.as_str(), "all" | "1" | "true" | "yes"));
+        log(format!(
+            "照片级数字人：{url}（lead {lead_ms} ms，等帧 {wait_frames}）"
+        ));
+        Some(Self { client, url, lead_ms, wait_frames, seq: 0 })
     }
 
     fn speak(&mut self, wav: &std::path::Path) -> Option<String> {
@@ -425,6 +434,26 @@ impl AvatarClient {
                 log(format!("数字人 sidecar 不可用：{err}"));
                 None
             }
+        }
+    }
+
+    fn wait_done(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(180);
+        // 给 sidecar 一点时间把 generating 置为 true，避免刚 POST 完就读到 false。
+        std::thread::sleep(Duration::from_millis(400));
+        loop {
+            if let Ok(resp) = self.client.get(format!("{}/health", self.url)).send() {
+                if let Ok(value) = resp.json::<serde_json::Value>() {
+                    if value.get("generating").and_then(|v| v.as_bool()) == Some(false) {
+                        return true;
+                    }
+                }
+            }
+            if Instant::now() >= deadline {
+                log("数字人等待帧超时，先播音频");
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 
@@ -715,8 +744,13 @@ fn start_tts_worker(
                             }
                             Err(err) => log(format!("保存数字人音频失败：{err:#}")),
                         }
+                        let wait_frames = avatar.as_ref().map(|a| a.wait_frames).unwrap_or(false);
+                        let mut waited = false;
+                        if clause_id.is_some() && wait_frames {
+                            waited = avatar.as_ref().map(|a| a.wait_done()).unwrap_or(false);
+                        }
                         let lead_ms = avatar.as_ref().map(|a| a.lead_ms).unwrap_or(0);
-                        if clause_id.is_some() && lead_ms > 0 {
+                        if clause_id.is_some() && !waited && lead_ms > 0 {
                             std::thread::sleep(Duration::from_millis(lead_ms));
                         }
                         let audio = resample_linear(&samples_all, chunk_rate, speaker.sample_rate);

@@ -85,7 +85,7 @@
   }
 
   function tickLive() {
-    if (!state.live || !state.playing) return;
+    if (!state.live || !state.playing || !state.liveStart) return;
     const idx = Math.floor(((performance.now() - state.liveStart) / 1000) * state.fps);
     if (state.frames.length) {
       const stage = document.getElementById("avatarStage");
@@ -99,6 +99,18 @@
       return;
     }
     state.raf = requestAnimationFrame(tickLive);
+  }
+
+  function startLive() {
+    // Rust 等 sidecar 把帧生成完（或 10 fps 模式下 lead 到点）后发这个事件；
+    // 从这里才开始走时钟，避免“音频在播、帧还没到”。
+    state.live = true;
+    state.liveStart = performance.now();
+    state.playing = true;
+    state.started = true;
+    if (state.frames.length) setMode(true);
+    status("说话中");
+    if (!state.raf) state.raf = requestAnimationFrame(tickLive);
   }
 
   async function startAudio() {
@@ -186,13 +198,13 @@
         state.fps = msg.fps || 10;
         state.started = false;
         if (!msg.audio) {
-          // 实时 TTS：音频由 Rust 播，UI 按自己的时钟取帧。
+          // 实时 TTS：等 Rust 发 avatar-speech-start 再开始时钟；
+          // 高质量模式要等 GFPGAN 把所有帧修完。
           state.live = true;
-          state.liveStart = performance.now();
-          state.playing = true;
+          state.liveStart = 0;
+          state.playing = false;
           state.started = true;
-          status("说话中");
-          state.raf = requestAnimationFrame(tickLive);
+          status(`生成中… ${msg.count} 帧`);
         } else {
           status(`生成中… ${msg.count} 帧`);
         }
@@ -226,6 +238,10 @@
       const view = new DataView(event.data);
       const blob = new Blob([event.data.slice(4)], { type: "image/jpeg" });
       state.frames.push({ pts: view.getUint32(0), url: URL.createObjectURL(blob) });
+      if (state.live && !state.playing && state.frames.length === 1) {
+        setMode(true);
+        showFrame(0);
+      }
       maybeStart();
     }
   }
