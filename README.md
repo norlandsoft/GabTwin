@@ -2,11 +2,10 @@
 
 和一个角色闲聊。
 
-GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂、回答，并用一张会动嘴的脸看着你。
+GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂、回答、出声。
 
-**状态：M0.5 分项验证阶段。** 语音输入 + 实时字幕 + 本地 Qwen2.5-7B 聊天 + 本机 TTS 已跑通
-（本地流式识别，中英；句末 SenseVoice 定稿；回复流式出字，Matcha TTS 中英混读；戴耳机可直接插话）。
-外放插话还没接；数字人已接 M3.0 占位角色（振幅口型 + 状态机），VRM 形象待换。
+**状态：语音闭环。** ASR + LLM + TTS 已跑通：本地流式识别（中英）、句末定稿、流式 LLM 回复、
+Breeze TTS 2（本地 4-bit）出声；戴耳机可直接插话。**不再包含数字人/口型/照片级虚拟形象。**
 
 ## 文档
 
@@ -14,13 +13,11 @@ GabTwin 是一个本地优先的实时语音对话应用：你说话，它听懂
 |---|---|
 | [00 愿景与范围](docs/00-vision.md) | 做什么、不做什么、成功标准 |
 | [01 系统架构](docs/01-architecture.md) | 模块、数据流、状态机、延迟预算 |
-| [02 技术选型](docs/02-tech-stack.md) | Rust / Tauri / Three.js 与依赖清单 |
-| [03 模型与资源](docs/03-models.md) | ASR / TTS / LLM / 数字人模型与许可 |
+| [02 技术选型](docs/02-tech-stack.md) | Rust / Tauri 与依赖清单 |
+| [03 模型与资源](docs/03-models.md) | ASR / TTS / LLM 模型与许可 |
 | [04 路线图](docs/04-roadmap.md) | M0–M4 里程碑与验收标准 |
 | [05 关键决策](docs/05-decisions.md) | ADR 与理由 |
 | [06 风险与开放问题](docs/06-risks.md) | 风险表、待验证清单 |
-| [07 人物形象](docs/07-avatar.md) | 数字人路线、口型、资产、事件协议、M3 拆分 |
-| [08 照片级真人](docs/08-photoreal-avatar.md) | 本地照片级方案、MuseTalk MLX 资源清单、M1 Max 可行性 |
 | [规划评审 2026-10](docs/reviews/2026-10-26-plan-review.md) | M0 评审意见、需先定的决定、M0' 建议 |
 | [dev/01 语音输入](docs/dev/01-voice-input.md) | 第一个分项验证：架构、模型、实测数字、限制 |
 | [dev/02 ASR 模型对照](docs/dev/02-asr-model-compare.md) | 大模型 vs small-CTC：CER、首字延迟、RTF |
@@ -53,13 +50,13 @@ macOS 14+ / Apple Silicon。开发基线：M1 Max，32 GB，10 核 CPU，24 核 
 
 1. **音频不出本机** —— 只有文本会离开本机（进 LLM；将来若用云 TTS，还有文本进 TTS）。
 2. **先半双工，再全双工** —— 先跑通"说完再答"，再处理打断。
-3. **数字人是可替换的渲染层** —— 晚接不亏，不绑架核心链路。
+3. **只做声音闭环** —— 不做数字人、口型、照片级虚拟形象，范围收敛在 ASR + LLM + TTS。
 
 ## 参考实现
 
 DSH 的语音输入插件（`@deepseek-ai/dsh-experimental-speech-to-text-sensevoice`）
 已经验证了 SenseVoice + sherpa-onnx 在本机的可行性，可作为 ASR 部分的参照；
-但它只做听写，没有端点、对话回路和数字人。
+但它只做听写，没有端点、对话回路和 TTS。
 
 ## 名字
 

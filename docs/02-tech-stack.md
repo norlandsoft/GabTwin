@@ -6,14 +6,14 @@
 |---|---|---|---|
 | 核心语言 | **Rust** | TypeScript | 延迟可预测、单二进制分发、音频生态够用 |
 | 桌面壳 | **Tauri 2** | Electron | 体积小、原生 Rust 后端、WebView 够渲染 |
-| UI / 数字人 | **TypeScript + Three.js** | wgpu / bevy | glTF + morph target 工具链成熟，迭代快 |
+| UI | **TypeScript + 原生 CSS** | 前端框架 | 对话界面足够轻，WebView 直接跑 |
 | 音频 I/O | **cpal** | coreaudio-rs | 跨平台、维护活跃 |
 | 重采样 | **rubato** | speexdsp | 实时、任意比率、质量好 |
 | AEC / NS / AGC | **webrtc-audio-processing** | aec3-rs | WebRTC APM 的生产级实现 |
 | VAD | **Silero VAD（ONNX）** | sherpa 内置 VAD | 已验证，1.8 MB |
 | ASR | **sherpa-onnx Rust 绑定** | whisper-rs | SenseVoice / zipformer 都能加载 |
 | LLM | **HTTP + SSE（reqwest）** | mistral.rs、llama.cpp | 云端质量优先，本地只做兜底 |
-| TTS | **piper-rs（本地）** / 云 TTS | CosyVoice sidecar | 先跑通延迟，再换音色 |
+| TTS | **Breeze TTS 2（本地 MLX 4-bit）** / 云 TTS | Qwen3-TTS、IndexTTS | 先跑通延迟与音色，再按许可评估 |
 | 本地通信 | Tauri IPC | WebSocket | 单机不需要网络 |
 | 存储 | TOML + 文件 | SQLite | 配置量小；对话记录后续再定 |
 
@@ -40,10 +40,10 @@
 
 ## 前端
 
-- Tauri 2 + Vite + TypeScript
-- 3D：Three.js（GLTFLoader、MorphTarget、AnimationMixer）
-- 状态：轻量 store（zustand 或自写 reducer）
-- 样式：CSS 变量 + 少量原生 CSS，不引入重 UI 框架
+- Tauri 2 + 原生 JavaScript + CSS（无打包器）
+- 对话气泡、状态栏、设置弹层
+- 状态：轻量 DOM 更新与事件监听
+- **不做 3D / 数字人 / 口型渲染**
 
 ## 平台与权限
 
@@ -83,9 +83,8 @@ tauri = "2"
 ## 待验证（M0 结束前）
 
 - [ ] `sherpa-onnx` Rust crate 能在 M1 Max 上加载 SenseVoice int8，并达到 DSH 的 RTF 水平。
-- [ ] Tauri 的 WKWebView 里 Three.js 720p 60 fps 的实际 GPU 占用。
 - [ ] `webrtc-audio-processing` 的 C++ 编译依赖是否顺畅（需要 clang / CMake）。
-- [ ] `piper-rs` 的中文音色可用性与许可。
+- [ ] Breeze TTS 2 的本地 4-bit 音色、许可与 RTF。
 - [ ] Tauri 麦克风权限在首次启动时的弹窗行为。
 
 ## 备选方案（若 Rust 阻塞进度）

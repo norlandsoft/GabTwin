@@ -1296,7 +1296,6 @@ dependencies = [
  "gabtwin-llm",
  "gabtwin-session",
  "gabtwin-tts",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "signal-hook",

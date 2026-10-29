@@ -24,4 +24,3 @@ gabtwin-session = { path = "../crates/gabtwin-session" }
 gabtwin-llm = { path = "../crates/gabtwin-llm" }
 gabtwin-tts = { path = "../crates/gabtwin-tts" }
 gabtwin-audio = { path = "../crates/gabtwin-audio" }
-reqwest = { version = "0.12", features = ["blocking", "json"] }

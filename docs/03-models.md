@@ -15,12 +15,11 @@
 | 端点 | smart-turn 类小模型 | 待定 | ONNX | 待核 | 可选，先用规则 |
 | LLM | DeepSeek（云） | — | HTTPS | 服务条款 | 默认 |
 | LLM 兜底 | Qwen3-4B/8B 4bit | 2–5 GB | MLX / llama.cpp | Apache-2.0（待核） | 未接 |
-| TTS（当前默认） | Matcha zh-en + vocos 16k | 126 MB | sherpa-onnx | **待核**（ModelScope，未标 license） | **已验证**：首句 100 ms，中英混读 |
+| TTS（当前默认） | Breeze TTS 2 4-bit | 2.2 GB | MLX（`.venv-mlx`） | **非商用研究许可** | **已接**：本地 24 kHz，port 8799 |
 | TTS 轻量 | Piper 中文 | 60–100 MB/音色 | piper-rs | **音色各自不同** | 候选 |
 | TTS 轻量 | Kokoro 82M | ~300 MB | ONNX | Apache-2.0（待核） | 候选 |
 | TTS 高质量 | CosyVoice 2 0.5B | 1–2 GB | Python sidecar | 待核 | 后续 |
-| TTS 云 | Azure / 火山 | — | WSS | 服务条款 | 备选，带 viseme |
-| 数字人 | glTF + blendshape | 5–30 MB | Three.js | 资产授权 | 自建或采购 |
+| TTS 云 | Azure / 火山 | — | WSS | 服务条款 | 备选，按许可与延迟评估 |
 
 ## 实测数据（M1 Max，SenseVoice int8，2 线程）
 
@@ -49,13 +48,8 @@
 - 端点：静音阈值 600 ms；若误判多，再挂小模型
 - AEC：WebRTC APM
 
-### M3（数字人）
-- 口型：中文拼音 → 12 类 viseme 映射表
-- 表情：12 个 blendshape 的状态机
-- 资产：VRM / Ready Player Me 占位，后续换定制
-
 ### M4（质量）
-- TTS 评估 CosyVoice 2（音色）与云 TTS（viseme 时间戳）
+- TTS 评估 CosyVoice 2（音色）与云 TTS（延迟/许可）
 - 本地 LLM 兜底
 
 ## 存储布局
@@ -95,7 +89,6 @@ $GABTWIN_HOME/
 - [ ] Piper 各音色许可（部分为 CC BY-NC，**不可商用**）
 - [ ] Kokoro 权重与音色许可
 - [ ] CosyVoice 权重许可
-- [ ] 数字人资产（VRM / 购买模型）的商用与再分发范围
 - [ ] 云端 LLM / TTS 的数据使用与留存条款
 
 原则：每个权重、每个音色都要有来源、版本、许可记录，统一写在
@@ -107,18 +100,6 @@ $GABTWIN_HOME/
 - TTS 音色按需下载，不预装。
 - 离线模式：无网络时跳过下载，提示"仅本地模型可用"。
 - 版本固定：每个模型锁定 revision 与哈希，不做自动升级。
-
-## 数字人资产规格
-
-| 项 | 要求 |
-|---|---|
-| 格式 | glTF 2.0（.glb），或 VRM 1.0 |
-| 拓扑 | 头颈 + 上半身，面数 ≤ 8 万 |
-| 表情 | blendshape ≥ 12 个（含口型与情绪） |
-| 贴图 | 2K，PBR，皮肤可用预积分 SSS |
-| 动画 | idle 呼吸、眨眼、点头、摇头 |
-| 目标 | 720p / 30 fps，M1 Max GPU 占用 ≤ 50% |
-
 
 ## 目录布局
 

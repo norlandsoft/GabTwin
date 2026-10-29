@@ -1,5 +1,5 @@
 use chrono::Local;
-use gabtwin_audio::{resample_linear, start_speaker_with_taps, PlaybackTap, RenderTap};
+use gabtwin_audio::{resample_linear, start_speaker_with_render, RenderTap};
 use gabtwin_llm::{system_prompt_for, Dialog, LlmClient, LlmConfig, Message};
 use gabtwin_session::{
     default_asr_model_dir, default_offline_model_dir, gabtwin_home, input_devices, models_root,
@@ -180,11 +180,9 @@ impl TtsState {
         let generation = self.generation.load(Ordering::SeqCst);
         let text = sanitize_for_tts(text);
         let text = text.as_str();
-        let avatar_on = std::env::var("GABTWIN_AVATAR").ok().as_deref() == Some("1");
         let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
             .map(|value| value != "0")
-            .unwrap_or(true)
-            && !avatar_on;
+            .unwrap_or(true);
         if one_shot {
             let text = text.trim();
             if text.is_empty() {
@@ -356,116 +354,6 @@ fn build_local_synth(app: &AppHandle) -> Option<Synth> {
     }
 }
 
-/// 数字人的 30 Hz 心跳：只读两个原子量，不碰音频回调。
-fn spawn_avatar_emitter(app: AppHandle, playback: PlaybackTap, sample_rate: u32) {
-    std::thread::spawn(move || {
-        log(format!("数字人遥测：30 Hz（输出 {sample_rate} Hz）"));
-        loop {
-            std::thread::sleep(Duration::from_millis(33));
-            let _ = app.emit(
-                "avatar-event",
-                serde_json::json!({
-                    "kind": "frame",
-                    "rms": playback.level(),
-                    "played_ms": playback.played_ms(sample_rate),
-                }),
-            );
-        }
-    });
-}
-
-struct AvatarClient {
-    client: reqwest::blocking::Client,
-    url: String,
-    lead_ms: u64,
-    wait_frames: bool,
-    seq: u64,
-}
-
-impl AvatarClient {
-    fn from_env() -> Option<Self> {
-        if std::env::var("GABTWIN_AVATAR").ok().as_deref() != Some("1") {
-            return None;
-        }
-        let url = std::env::var("GABTWIN_AVATAR_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8811".to_string());
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
-            .ok()?;
-        let lead_ms = std::env::var("GABTWIN_AVATAR_LEAD_MS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(1200);
-        let restore = std::env::var("GABTWIN_AVATAR_RESTORE")
-            .unwrap_or_default()
-            .to_lowercase();
-        let wait_frames = std::env::var("GABTWIN_AVATAR_WAIT")
-            .map(|value| value != "0")
-            .unwrap_or_else(|_| matches!(restore.as_str(), "all" | "1" | "true" | "yes"));
-        log(format!(
-            "照片级数字人：{url}（lead {lead_ms} ms，等帧 {wait_frames}）"
-        ));
-        Some(Self { client, url, lead_ms, wait_frames, seq: 0 })
-    }
-
-    fn speak(&mut self, wav: &std::path::Path) -> Option<String> {
-        self.seq += 1;
-        let clause_id = format!("clause-{}", self.seq);
-        let body = serde_json::json!({
-            "wav": wav.display().to_string(),
-            "clause_id": clause_id,
-        });
-        match self
-            .client
-            .post(format!("{}/speak", self.url))
-            .json(&body)
-            .send()
-        {
-            Ok(resp) if resp.status().is_success() => {
-                log(format!("数字人 clause {clause_id} 已提交"));
-                Some(clause_id)
-            }
-            Ok(resp) => {
-                log(format!("数字人 /speak 返回 {}", resp.status()));
-                None
-            }
-            Err(err) => {
-                log(format!("数字人 sidecar 不可用：{err}"));
-                None
-            }
-        }
-    }
-
-    fn wait_done(&self) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(180);
-        // 给 sidecar 一点时间把 generating 置为 true，避免刚 POST 完就读到 false。
-        std::thread::sleep(Duration::from_millis(400));
-        loop {
-            if let Ok(resp) = self.client.get(format!("{}/health", self.url)).send() {
-                if let Ok(value) = resp.json::<serde_json::Value>() {
-                    if value.get("generating").and_then(|v| v.as_bool()) == Some(false) {
-                        return true;
-                    }
-                }
-            }
-            if Instant::now() >= deadline {
-                log("数字人等待帧超时，先播音频");
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
-    fn stop(&self) {
-        let _ = self
-            .client
-            .post(format!("{}/stop", self.url))
-            .timeout(Duration::from_millis(500))
-            .send();
-    }
-}
-
 fn start_tts_worker(
     app: AppHandle,
     generation: Arc<AtomicU64>,
@@ -533,8 +421,7 @@ fn start_tts_worker(
             synth.sample_rate(),
             warm.elapsed().as_millis()
         ));
-        let playback = PlaybackTap::new();
-        let speaker = match start_speaker_with_taps(render, playback.clone()) {
+        let speaker = match start_speaker_with_render(render) {
             Ok(speaker) => speaker,
             Err(err) => {
                 log(format!("音频输出不可用：{err:#}"));
@@ -545,7 +432,6 @@ fn start_tts_worker(
                 return;
             }
         };
-        spawn_avatar_emitter(app.clone(), playback, speaker.sample_rate);
         headphones.store(speaker.headphones, Ordering::SeqCst);
         let barge_in = std::env::var("GABTWIN_BARGE_IN")
             .map(|value| value == "1")
@@ -563,9 +449,7 @@ fn start_tts_worker(
             }
         ));
 
-        let mut avatar = AvatarClient::from_env();
-        let avatar_on = avatar.is_some();
-        let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0" || avatar_on;
+        let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0";
         let engine = engine.clone();
         let mut tts_seq: u64 = 0;
         let mut reply_text = String::new();
@@ -582,19 +466,12 @@ fn start_tts_worker(
                 TtsCommand::Stop => {
                     *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
                     reply_text.clear();
-                    if let Some(client) = avatar.as_ref() {
-                        client.stop();
-                    }
                     speaker.clear();
                     started = false;
                     queued_ms = 0;
                     first_push_at = None;
                     mute.store(false, Ordering::SeqCst);
                     speaking.store(false, Ordering::SeqCst);
-                    let _ = app.emit(
-                        "avatar-event",
-                        serde_json::json!({ "kind": "stop", "reason": "tts_stop" }),
-                    );
                 }
                 TtsCommand::Flush { generation: g } => {
                     if g != generation.load(Ordering::SeqCst) {
@@ -666,10 +543,6 @@ fn start_tts_worker(
                         if save_tts {
                             samples_all.extend_from_slice(samples);
                         }
-                        if avatar_on {
-                            // 先攒完整句，再交给 sidecar；音频等 lead 后再播。
-                            return;
-                        }
                         let ms = samples.len() as u64 * 1000 / rate.max(1) as u64;
                         // 单段也可能很长（one-shot）：按块背压，别让 10 秒播放环溢出。
                         let played = first_push_at
@@ -726,75 +599,6 @@ fn start_tts_worker(
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
                     }
-                    if avatar_on {
-                        if chunk_rate == 0 || samples_all.is_empty() {
-                            continue;
-                        }
-                        tts_seq += 1;
-                        let dir = gabtwin_home().join("avatar/speech");
-                        let _ = std::fs::create_dir_all(&dir);
-                        let stamp = chrono::Local::now().format("%H%M%S").to_string();
-                        let wav_path = dir.join(format!("{stamp}-{tts_seq:03}.wav"));
-                        let mut clause_id = None;
-                        match gabtwin_tts::save_wav(&wav_path, &samples_all, chunk_rate) {
-                            Ok(()) => {
-                                if let Some(client) = avatar.as_mut() {
-                                    clause_id = client.speak(&wav_path);
-                                }
-                            }
-                            Err(err) => log(format!("保存数字人音频失败：{err:#}")),
-                        }
-                        let wait_frames = avatar.as_ref().map(|a| a.wait_frames).unwrap_or(false);
-                        let mut waited = false;
-                        if clause_id.is_some() && wait_frames {
-                            waited = avatar.as_ref().map(|a| a.wait_done()).unwrap_or(false);
-                        }
-                        let lead_ms = avatar.as_ref().map(|a| a.lead_ms).unwrap_or(0);
-                        if clause_id.is_some() && !waited && lead_ms > 0 {
-                            std::thread::sleep(Duration::from_millis(lead_ms));
-                        }
-                        let audio = resample_linear(&samples_all, chunk_rate, speaker.sample_rate);
-                        let ms = samples_all.len() as u64 * 1000 / chunk_rate as u64;
-                        queued_ms += ms;
-                        if first_push_at.is_none() {
-                            first_push_at = Some(Instant::now());
-                        }
-                        speaking.store(true, Ordering::SeqCst);
-                        if !mute.swap(true, Ordering::SeqCst) {
-                            log("TTS 播放：屏蔽麦克风");
-                        }
-                        speaker.push(audio);
-                        started = true;
-                        let first_audio_ms = turn_started
-                            .lock()
-                            .ok()
-                            .and_then(|value| *value)
-                            .map(|at| at.elapsed().as_millis() as u64);
-                        log(format!(
-                            "TTS 首音 {:?} ms（首句整段 {} ms，数字人 {:?}）",
-                            first_audio_ms,
-                            tick.elapsed().as_millis(),
-                            clause_id
-                        ));
-                        if first_clause {
-                            let _ = app.emit(
-                                "tts-start",
-                                serde_json::json!({
-                                    "first_audio_ms": first_audio_ms,
-                                    "clause_ms": tick.elapsed().as_millis() as u64,
-                                }),
-                            );
-                        }
-                        if let Some(clause_id) = clause_id {
-                            let _ = app.emit(
-                                "avatar-speech-start",
-                                serde_json::json!({
-                                    "clause_id": clause_id,
-                                    "lead_ms": lead_ms,
-                                }),
-                            );
-                        }
-                    }
                     // 分段之间留一点呼吸，避免下一句贴着上一句的尾音。
                     let gap_ms = std::env::var("GABTWIN_TTS_SEGMENT_GAP_MS")
                         .ok()
@@ -810,7 +614,7 @@ fn start_tts_worker(
                             ));
                         }
                     }
-                    if save_tts && !avatar_on && !samples_all.is_empty() && chunk_rate > 0 {
+                    if save_tts && !samples_all.is_empty() && chunk_rate > 0 {
                         tts_seq += 1;
                         let dir = gabtwin_home()
                             .join("recordings")
@@ -1419,9 +1223,7 @@ fn start_llm_turn(app: &AppHandle, text: String) {
         .map(|value| value != "0")
         .unwrap_or(true);
     // 流式首句：LLM 一边输出，先合成第一句；剩余等 LLM 结束再整段合成。
-    let avatar_on = std::env::var("GABTWIN_AVATAR").ok().as_deref() == Some("1");
     let overlap_tts = final_tts
-        && !avatar_on
         && std::env::var("GABTWIN_TTS_OVERLAP")
             .map(|value| value != "0")
             .unwrap_or(false);
@@ -1697,22 +1499,6 @@ fn interrupt(app: AppHandle) {
     log("手动打断：停止 TTS 并取消回复");
 }
 
-/// 照片级预览的音频不走 WebView（WKWebView 会拦自动播放/混合内容），
-/// 直接用系统 afplay 播固定的 3 秒样音，UI 按自己的时钟取帧。
-#[tauri::command]
-fn avatar_play_preview() -> Result<(), String> {
-    let path = gabtwin_home().join("avatar/preview.wav");
-    if !path.is_file() {
-        return Err(format!("缺少预览音频：{}", path.display()));
-    }
-    std::process::Command::new("/usr/bin/afplay")
-        .arg(&path)
-        .spawn()
-        .map_err(|err| format!("afplay 启动失败：{err}"))?;
-    log(format!("照片级预览音频：{}", path.display()));
-    Ok(())
-}
-
 #[tauri::command]
 fn tts_info(state: tauri::State<TtsState>) -> serde_json::Value {
     let (engine, detail) = state.label.lock().unwrap().clone();
@@ -1753,7 +1539,6 @@ pub fn run() {
             replay_sample,
             app_info,
             tts_info,
-            avatar_play_preview,
             interrupt,
             clear_memory,
             get_persona,

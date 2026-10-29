@@ -19,16 +19,16 @@
 │  └───────────────────────┬──────────────────────────────┘              │
 │                          │ IPC（Tauri commands + events）               │
 │  ┌───────────────────────▼──────────────────────────────┐              │
-│  │  WebView（TypeScript + Three.js）                     │              │
-│  │  数字人渲染 · 口型/表情 · 字幕 · 设置界面              │              │
+│  │  WebView（TypeScript）                                │              │
+│  │  对话气泡 · 字幕 · 状态 · 设置界面                     │              │
 │  └──────────────────────────────────────────────────────┘              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 两条轴：
 
-- **纵向**：Rust 负责实时与推理，WebView 负责画面与交互。
-- **横向**：声音进 → 文字 → 回答 → 声音出，数字人只消费"音频 + 时间戳"。
+- **纵向**：Rust 负责实时与推理，WebView 负责对话界面与交互。
+- **横向**：声音进 → 文字 → 回答 → 声音出；不生成任何虚拟形象。
 
 ## 模块职责
 
@@ -39,9 +39,8 @@
 | `asr` | 流式/整段识别，产出 partial 与 final | 断句策略 |
 | `dialog` | 会话状态机、上下文、超时、取消 | 具体模型调用 |
 | `llm` | 流式请求、SSE 解析、取消、重试、用量统计 | 句子切分 |
-| `tts` | 文本→音频流、音色、viseme 时间轴 | 播放调度 |
+| `tts` | 文本→音频流、音色 | 播放调度 |
 | `audio-out` | 播放队列、淡入淡出、回声参考回灌 | 合成 |
-| `avatar` | 口型/表情/动作状态机、渲染 | 语音 |
 | `store` | 配置、密钥（Keychain）、模型缓存、日志 | — |
 
 模块之间只通过事件与队列通信，不互相调用内部方法，方便单测与替换。
@@ -62,12 +61,10 @@ Rust → UI：
 | `asr.final` | `text`, `durationMs` | 端点确认 |
 | `dialog.state` | `idle / listening / thinking / speaking / interrupted` | 状态切换 |
 | `llm.delta` | `text` | 逐 token |
-| `tts.chunk` | `seq`, `pcm`（可选）, `visemes[]` | 每个音频包 |
+| `tts.chunk` | `seq`, `pcm`（可选） | 每个音频包 |
 | `error` | `code`, `message`, `recoverable` | 异常 |
 
 UI → Rust：`start_listening`、`stop_listening`、`interrupt`、`set_device`、`set_voice`、`set_persona`。
-
-`visemes[]` 的元素是 `{tMs, viseme, weight}`，`tMs` 相对该音频包起点。
 
 ### 实现现状（M0.5 · 语音输入）
 
@@ -82,7 +79,7 @@ UI → Rust：`start_listening`、`stop_listening`、`interrupt`、`set_device`�
 
 - **音频不过 IPC**：PCM 留在 Rust，UI 只收文本、电平与指标。
 - Tauri 的事件名不允许点号，所以是 `session-event` 而不是 `session.event`。
-- **播放时钟尚未引入**（还没有音频输出）；接 TTS 时必须补，否则口型会跟"包到达时间"漂移。
+- **播放时钟**：TTS 已接，播放层以实际写出的音频帧为时钟；UI 只负责显示文字与状态。
 - 端点延迟按**音频时间**计（最后一个有声帧之后的静音时长），这样实时与回放同一口径。
 - **LLM 事件**（`llm-thinking` / `llm-delta` / `llm-done` / `llm-cancelled` / `llm-error`）
   由应用层直接发；每句定稿（`segment`）触发一轮，`turn_id` 防止旧流污染新回合。
@@ -154,7 +151,6 @@ src/
 ├── app/             Tauri 入口、IPC、权限
 └── ui/              TypeScript：渲染、字幕、设置
 assets/
-├── avatar/          glTF/VRM、贴图、动画
 └── voices/          音色与 LICENSES.md
 ```
 

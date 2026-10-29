@@ -139,104 +139,22 @@ body {
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: row;
-  gap: 14px;
-  padding: 14px 16px;
+  flex-direction: column;
+  padding: 18px 24px;
   overflow: hidden;
-}
-
-/* ---------- 人物区 ---------- */
-
-.avatar-stage {
-  position: relative;
-  flex: 0 0 auto;
-  height: 100%;
-  aspect-ratio: 3 / 4;
-  max-width: 44%;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background:
-    radial-gradient(85% 120% at 50% 0%, rgba(255, 196, 168, 0.15), transparent 58%),
-    radial-gradient(60% 80% at 50% 100%, rgba(135, 165, 255, 0.08), transparent 65%),
-    linear-gradient(180deg, #191b21 0%, #101215 100%);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-}
-
-.avatar-glow {
-  position: absolute;
-  inset: -20% -10% auto -10%;
-  height: 80%;
-  background: radial-gradient(closest-side, rgba(255, 190, 160, 0.18), transparent 70%);
-  filter: blur(10px);
-  pointer-events: none;
-}
-
-#avatarCanvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-#avatarPhoto {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center center;
-  display: none;
-}
-
-.photo-mode #avatarPhoto {
-  display: block;
-}
-
-.photo-mode #avatarCanvas {
-  display: none;
-}
-
-.avatar-caption {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 5px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 999px;
-  background: rgba(12, 14, 18, 0.55);
-  backdrop-filter: blur(8px);
-}
-
-.avatar-name {
-  font-size: 12px;
-  color: var(--text);
-}
-
-.avatar-mood {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.avatar-mood::before {
-  content: "·";
-  margin-right: 6px;
-  color: var(--dim);
 }
 
 .chat-panel {
   flex: 1;
-  min-width: 0;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 4px 4px 4px 0;
+  padding: 4px 4px 8px;
 }
 
 .hint {
