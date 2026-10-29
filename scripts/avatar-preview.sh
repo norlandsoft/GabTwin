@@ -23,7 +23,7 @@ fi
 "$ROOT/scripts/avatar-sidecar-start.sh"
 
 mkdir -p "$(dirname "$LOG")"
-nohup env GABTWIN_TTS=local GABTWIN_LLM=deepseek "$BIN" >>"$LOG" 2>&1 &
+nohup env GABTWIN_TTS=local GABTWIN_LLM=deepseek GABTWIN_AVATAR=1 GABTWIN_AVATAR_LEAD_MS=900 GABTWIN_TTS_OVERLAP=0 GABTWIN_TTS_FIRST_CAP=16 "$BIN" >>"$LOG" 2>&1 &
 pid=$!
 echo "$pid" >"$PID_FILE"
 echo "GabTwin 启动 pid=${pid}，等窗口…"

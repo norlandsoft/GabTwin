@@ -386,6 +386,7 @@ if (!invoke) {
       avatar.setLevel(payload.rms || 0);
       avatar.setPlayedMs(payload.played_ms || 0);
     } else if (payload.kind === "stop") {
+      window.GabTwinPhoto?.stop();
       if (avatar.isSpeaking()) setAvatarState("interrupted");
     }
   });

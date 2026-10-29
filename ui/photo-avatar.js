@@ -18,6 +18,8 @@
     clockStart: 0,
     started: false,
     done: false,
+    live: false,
+    liveStart: 0,
     retry: 0,
   };
 
@@ -46,6 +48,7 @@
     state.playing = false;
     state.started = false;
     state.clockMode = false;
+    state.live = false;
     if (state.raf) cancelAnimationFrame(state.raf);
     state.raf = 0;
     if (state.audio) {
@@ -79,6 +82,23 @@
       return;
     }
     state.raf = requestAnimationFrame(tick);
+  }
+
+  function tickLive() {
+    if (!state.live || !state.playing) return;
+    const idx = Math.floor(((performance.now() - state.liveStart) / 1000) * state.fps);
+    if (state.frames.length) {
+      const stage = document.getElementById("avatarStage");
+      if (stage && !stage.classList.contains("photo-mode")) setMode(true);
+      showFrame(idx);
+    }
+    const total = ((state.clause && state.clause.count) || state.frames.length) / state.fps;
+    if (state.done && idx >= total) {
+      state.playing = false;
+      status("说完");
+      return;
+    }
+    state.raf = requestAnimationFrame(tickLive);
   }
 
   async function startAudio() {
@@ -165,14 +185,27 @@
         state.audioUrl = msg.audio || null;
         state.fps = msg.fps || 10;
         state.started = false;
-        status(`生成中… ${msg.count} 帧`);
+        if (!msg.audio) {
+          // 实时 TTS：音频由 Rust 播，UI 按自己的时钟取帧。
+          state.live = true;
+          state.liveStart = performance.now();
+          state.playing = true;
+          state.started = true;
+          status("说话中");
+          state.raf = requestAnimationFrame(tickLive);
+        } else {
+          status(`生成中… ${msg.count} 帧`);
+        }
         return;
       }
       if (msg.type === "done") {
         state.generating = false;
         state.done = true;
-        maybeStart();
-        if (!state.audioUrl && state.frames.length) showFrame(0);
+        if (state.live) {
+          // tickLive 会在帧播完后自己停。
+        } else {
+          maybeStart();
+        }
         return;
       }
       if (msg.type === "stopped") {

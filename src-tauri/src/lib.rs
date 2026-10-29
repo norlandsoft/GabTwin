@@ -180,9 +180,11 @@ impl TtsState {
         let generation = self.generation.load(Ordering::SeqCst);
         let text = sanitize_for_tts(text);
         let text = text.as_str();
+        let avatar_on = std::env::var("GABTWIN_AVATAR").ok().as_deref() == Some("1");
         let one_shot = std::env::var("GABTWIN_TTS_ONE_SHOT")
             .map(|value| value != "0")
-            .unwrap_or(true);
+            .unwrap_or(true)
+            && !avatar_on;
         if one_shot {
             let text = text.trim();
             if text.is_empty() {
@@ -372,6 +374,69 @@ fn spawn_avatar_emitter(app: AppHandle, playback: PlaybackTap, sample_rate: u32)
     });
 }
 
+struct AvatarClient {
+    client: reqwest::blocking::Client,
+    url: String,
+    lead_ms: u64,
+    seq: u64,
+}
+
+impl AvatarClient {
+    fn from_env() -> Option<Self> {
+        if std::env::var("GABTWIN_AVATAR").ok().as_deref() != Some("1") {
+            return None;
+        }
+        let url = std::env::var("GABTWIN_AVATAR_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8811".to_string());
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .ok()?;
+        let lead_ms = std::env::var("GABTWIN_AVATAR_LEAD_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1200);
+        log(format!("照片级数字人：{url}（lead {lead_ms} ms）"));
+        Some(Self { client, url, lead_ms, seq: 0 })
+    }
+
+    fn speak(&mut self, wav: &std::path::Path) -> Option<String> {
+        self.seq += 1;
+        let clause_id = format!("clause-{}", self.seq);
+        let body = serde_json::json!({
+            "wav": wav.display().to_string(),
+            "clause_id": clause_id,
+        });
+        match self
+            .client
+            .post(format!("{}/speak", self.url))
+            .json(&body)
+            .send()
+        {
+            Ok(resp) if resp.status().is_success() => {
+                log(format!("数字人 clause {clause_id} 已提交"));
+                Some(clause_id)
+            }
+            Ok(resp) => {
+                log(format!("数字人 /speak 返回 {}", resp.status()));
+                None
+            }
+            Err(err) => {
+                log(format!("数字人 sidecar 不可用：{err}"));
+                None
+            }
+        }
+    }
+
+    fn stop(&self) {
+        let _ = self
+            .client
+            .post(format!("{}/stop", self.url))
+            .timeout(Duration::from_millis(500))
+            .send();
+    }
+}
+
 fn start_tts_worker(
     app: AppHandle,
     generation: Arc<AtomicU64>,
@@ -469,7 +534,9 @@ fn start_tts_worker(
             }
         ));
 
-        let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0";
+        let mut avatar = AvatarClient::from_env();
+        let avatar_on = avatar.is_some();
+        let save_tts = std::env::var("GABTWIN_TTS_SAVE").unwrap_or_else(|_| "1".to_string()) != "0" || avatar_on;
         let engine = engine.clone();
         let mut tts_seq: u64 = 0;
         let mut reply_text = String::new();
@@ -486,6 +553,9 @@ fn start_tts_worker(
                 TtsCommand::Stop => {
                     *last_reply.lock().unwrap() = (reply_text.clone(), Some(Instant::now()));
                     reply_text.clear();
+                    if let Some(client) = avatar.as_ref() {
+                        client.stop();
+                    }
                     speaker.clear();
                     started = false;
                     queued_ms = 0;
@@ -567,6 +637,10 @@ fn start_tts_worker(
                         if save_tts {
                             samples_all.extend_from_slice(samples);
                         }
+                        if avatar_on {
+                            // 先攒完整句，再交给 sidecar；音频等 lead 后再播。
+                            return;
+                        }
                         let ms = samples.len() as u64 * 1000 / rate.max(1) as u64;
                         // 单段也可能很长（one-shot）：按块背压，别让 10 秒播放环溢出。
                         let played = first_push_at
@@ -623,6 +697,70 @@ fn start_tts_worker(
                     if g != generation.load(Ordering::SeqCst) {
                         continue;
                     }
+                    if avatar_on {
+                        if chunk_rate == 0 || samples_all.is_empty() {
+                            continue;
+                        }
+                        tts_seq += 1;
+                        let dir = gabtwin_home().join("avatar/speech");
+                        let _ = std::fs::create_dir_all(&dir);
+                        let stamp = chrono::Local::now().format("%H%M%S").to_string();
+                        let wav_path = dir.join(format!("{stamp}-{tts_seq:03}.wav"));
+                        let mut clause_id = None;
+                        match gabtwin_tts::save_wav(&wav_path, &samples_all, chunk_rate) {
+                            Ok(()) => {
+                                if let Some(client) = avatar.as_mut() {
+                                    clause_id = client.speak(&wav_path);
+                                }
+                            }
+                            Err(err) => log(format!("保存数字人音频失败：{err:#}")),
+                        }
+                        let lead_ms = avatar.as_ref().map(|a| a.lead_ms).unwrap_or(0);
+                        if clause_id.is_some() && lead_ms > 0 {
+                            std::thread::sleep(Duration::from_millis(lead_ms));
+                        }
+                        let audio = resample_linear(&samples_all, chunk_rate, speaker.sample_rate);
+                        let ms = samples_all.len() as u64 * 1000 / chunk_rate as u64;
+                        queued_ms += ms;
+                        if first_push_at.is_none() {
+                            first_push_at = Some(Instant::now());
+                        }
+                        speaking.store(true, Ordering::SeqCst);
+                        if !mute.swap(true, Ordering::SeqCst) {
+                            log("TTS 播放：屏蔽麦克风");
+                        }
+                        speaker.push(audio);
+                        started = true;
+                        let first_audio_ms = turn_started
+                            .lock()
+                            .ok()
+                            .and_then(|value| *value)
+                            .map(|at| at.elapsed().as_millis() as u64);
+                        log(format!(
+                            "TTS 首音 {:?} ms（首句整段 {} ms，数字人 {:?}）",
+                            first_audio_ms,
+                            tick.elapsed().as_millis(),
+                            clause_id
+                        ));
+                        if first_clause {
+                            let _ = app.emit(
+                                "tts-start",
+                                serde_json::json!({
+                                    "first_audio_ms": first_audio_ms,
+                                    "clause_ms": tick.elapsed().as_millis() as u64,
+                                }),
+                            );
+                        }
+                        if let Some(clause_id) = clause_id {
+                            let _ = app.emit(
+                                "avatar-speech-start",
+                                serde_json::json!({
+                                    "clause_id": clause_id,
+                                    "lead_ms": lead_ms,
+                                }),
+                            );
+                        }
+                    }
                     // 分段之间留一点呼吸，避免下一句贴着上一句的尾音。
                     let gap_ms = std::env::var("GABTWIN_TTS_SEGMENT_GAP_MS")
                         .ok()
@@ -638,7 +776,7 @@ fn start_tts_worker(
                             ));
                         }
                     }
-                    if save_tts && !samples_all.is_empty() && chunk_rate > 0 {
+                    if save_tts && !avatar_on && !samples_all.is_empty() && chunk_rate > 0 {
                         tts_seq += 1;
                         let dir = gabtwin_home()
                             .join("recordings")
@@ -1247,7 +1385,9 @@ fn start_llm_turn(app: &AppHandle, text: String) {
         .map(|value| value != "0")
         .unwrap_or(true);
     // 流式首句：LLM 一边输出，先合成第一句；剩余等 LLM 结束再整段合成。
+    let avatar_on = std::env::var("GABTWIN_AVATAR").ok().as_deref() == Some("1");
     let overlap_tts = final_tts
+        && !avatar_on
         && std::env::var("GABTWIN_TTS_OVERLAP")
             .map(|value| value != "0")
             .unwrap_or(false);
