@@ -263,3 +263,22 @@ M1 Max 的 24 核 GPU 比 M5 Max 弱不少；下面所有 fps 都是**待实测�
 - M5 Max 实时业务层（640×480、29.8 fps、4 GB 目标）：<https://github.com/dahai80/musetalk-mlx>
 - Mac 上跑通的照片级参考（M5 Max 128GB、640×480 20 fps、ANE+GPU）：<https://github.com/liwagu/distillCKirk>
 - DWPose 权重（Apache-2.0）：<https://huggingface.co/yzd-v/DWPose>
+
+## 4. GFPGAN 质量模式（2026-10-30 实测）
+
+MuseTalk 256² 的嘴部上限，用 GFPGAN v1.4（PyTorch/MPS）修生成脸：
+
+- 输入 256² 生成脸 → 输出 512²，只把修复后的下半脸贴回；
+- 单帧修复约 **0.27 s**；sidecar 集成后 30 帧预览约 **28 s**（约 1 fps，含 MuseTalk 与内存压力）；
+- 视觉上唇线、牙齿、皮肤明显清楚；脸会略“美颜”，身份有轻微漂移；
+- 默认 `GABTWIN_AVATAR_RESTORE=preview`：**预览用修复，实时仍 10 fps 的 256²**；
+- `GABTWIN_AVATAR_RESTORE=all`：实时也修复，约 1–2 fps；
+- 需要 `.venv-cosy` 里的 torch/gfpgan/facexlib 和 `models/avatar/gfpgan/GFPGANv1.4.pth`（348 MB，本地）。
+
+启动质量预览：
+
+```bash
+GABTWIN_AVATAR_RESTORE=preview ./scripts/avatar-sidecar-start.sh
+./scripts/avatar-preview.sh
+```
+

@@ -20,9 +20,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import struct
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -38,6 +41,10 @@ import mlx.core as mx  # noqa: E402
 FPS = 10
 OUT_W, OUT_H = 540, 720
 FACE = 256
+RESTORE_MODE = os.environ.get("GABTWIN_AVATAR_RESTORE", "0").strip().lower()
+RESTORE_PREVIEW = RESTORE_MODE in ("1", "all", "preview", "true", "yes")
+RESTORE_ALL = RESTORE_MODE in ("1", "all", "true", "yes")
+RESTORE_URL = os.environ.get("GABTWIN_GFPGAN_URL", "http://127.0.0.1:8812/restore")
 
 # Vision 在 9.0–12.0 s 每 0.5 s 检出的 (t, x, y, w, h)；与样片脚本一致。
 BOXES = [
@@ -144,6 +151,29 @@ def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) 
     return buf.tobytes() if ok else None
 
 
+def restore_face(face: np.ndarray) -> np.ndarray:
+    """把 256 生成脸交给 GFPGAN 小服务修成 512；失败就用原图，不阻塞出帧。"""
+    if not (RESTORE_PREVIEW or RESTORE_ALL):
+        return face
+    try:
+        ok, buf = cv2.imencode(".jpg", face, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            return face
+        req = urllib.request.Request(
+            RESTORE_URL,
+            data=buf.tobytes(),
+            headers={"Content-Type": "image/jpeg"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+        out = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        return out if out is not None else face
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        print(f"GFPGAN restore 失败，使用原脸：{error}", flush=True)
+        return face
+
+
 async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) -> None:
     """生成一个 clause 的帧，边生成边通过 WebSocket 发出去。"""
     assert PIPE is not None
@@ -163,6 +193,8 @@ async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) ->
         })
         # 10 fps 输出：每帧取源视频 25 fps 的对应帧（循环）
         base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
+        # preview 默认修复；实时 /speak 默认不修复，避免 10 fps 掉到 1 fps。
+        use_restore = RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None)
         for start in range(0, n, 4):
             if STATE["cancel"]:
                 break
@@ -170,7 +202,8 @@ async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) ->
             lat_stack = mx.concatenate([LATENTS[base_idx[i]] for i in range(start, end)], axis=0)
             faces = PIPE.run_batched(lat_stack, chunks[start:end], batch_size=4)
             for j in range(start, end):
-                jpg = compose_frame(FRAMES[base_idx[j]], faces[j - start], BOXES_PER_FRAME[base_idx[j]])
+                face = restore_face(faces[j - start]) if use_restore else faces[j - start]
+                jpg = compose_frame(FRAMES[base_idx[j]], face, BOXES_PER_FRAME[base_idx[j]])
                 if jpg:
                     await broadcast_bytes(struct.pack(">I", int(round(j * 1000 / FPS))) + jpg)
             await asyncio.sleep(0)

@@ -10,6 +10,9 @@ if [[ -f "$PID_FILE" ]]; then
     echo "停止 avatar sidecar pid=$pid"
   fi
   rm -f "$PID_FILE"
+  if [[ "${GABTWIN_AVATAR_RESTORE:-0}" != "0" ]]; then
+    "$ROOT/scripts/gfpgan-restore-stop.sh" 2>/dev/null || true
+  fi
 else
   echo "没有 avatar sidecar pid 文件"
 fi
