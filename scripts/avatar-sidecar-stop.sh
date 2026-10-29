@@ -10,7 +10,8 @@ if [[ -f "$PID_FILE" ]]; then
     echo "停止 avatar sidecar pid=$pid"
   fi
   rm -f "$PID_FILE"
-  if [[ "${GABTWIN_AVATAR_RESTORE:-0}" != "0" ]]; then
+  RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-all}"
+  if [[ "$RESTORE_MODE" != "0" && "$RESTORE_MODE" != "off" && "$RESTORE_MODE" != "false" ]]; then
     "$ROOT/scripts/gfpgan-restore-stop.sh" 2>/dev/null || true
   fi
 else
