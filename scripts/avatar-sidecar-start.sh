@@ -12,10 +12,13 @@ LOG="$GABTWIN_HOME/logs/avatar-sidecar.log"
 
 UNIFORM_MODE="${GABTWIN_AVATAR_UNIFORM:-1}"
 export GABTWIN_AVATAR_UNIFORM="$UNIFORM_MODE"
-if [[ "$UNIFORM_MODE" == "1" || "$UNIFORM_MODE" == "on" || "$UNIFORM_MODE" == "true" ]]; then
+if [[ -n "${GABTWIN_AVATAR_RESTORE+x}" ]]; then
+  # 显式指定优先：整脸 GFPGAN 可以和 uniform 同时开。
+  RESTORE_MODE="$GABTWIN_AVATAR_RESTORE"
+elif [[ "$UNIFORM_MODE" == "1" || "$UNIFORM_MODE" == "on" || "$UNIFORM_MODE" == "true" ]]; then
   RESTORE_MODE=0
 else
-  RESTORE_MODE="${GABTWIN_AVATAR_RESTORE:-all}"
+  RESTORE_MODE=all
 fi
 export GABTWIN_AVATAR_RESTORE="$RESTORE_MODE"
 if [[ "$RESTORE_MODE" != "0" && "$RESTORE_MODE" != "off" && "$RESTORE_MODE" != "false" ]]; then

@@ -210,7 +210,7 @@ async def run_clause(wav: Path, clause_id: str, audio_url: str | None = None) ->
         # 10 fps 输出：每帧取源视频 25 fps 的对应帧（循环）
         base_idx = [min(len(FRAMES) - 1, int(round(i * 25 / FPS))) % len(FRAMES) for i in range(n)]
         # preview 默认修复；实时 /speak 默认不修复，避免 10 fps 掉到 1 fps。
-        use_restore = (not UNIFORM) and (RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None))
+        use_restore = RESTORE_ALL or (RESTORE_PREVIEW and audio_url is not None)
         if use_restore:
             # 先把整段 256 脸生成完，再统一走 GFPGAN；不要 MLX/Torch 交替抢显存。
             faces_all = []

@@ -17,7 +17,7 @@ echo "$pid" >"$PIDFILE"
 echo "启动 GFPGAN restore pid=${pid}，等待模型…"
 for _ in $(seq 1 180); do
   if curl -fsS --noproxy '*' --max-time 1 http://127.0.0.1:8812/health >/dev/null 2>&1; then
-    echo "就绪：http://127.0.0.1:8812（日志 $LOG）"
+    echo "就绪：http://127.0.0.1:8812（日志 ${LOG}）"
     exit 0
   fi
   if ! kill -0 "$pid" 2>/dev/null; then

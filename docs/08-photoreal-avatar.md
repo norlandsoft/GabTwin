@@ -304,3 +304,17 @@ MuseTalk 256² 的嘴部上限，用 GFPGAN v1.4（PyTorch/MPS）修生成脸：
 # 想要之前的清晰嘴（可选）
 GABTWIN_AVATAR_UNIFORM=0 GABTWIN_AVATAR_RESTORE=all ./scripts/avatar-sidecar-start.sh
 ```
+
+## 6. 整脸 GFPGAN + 统一柔化（2026-10-30 实测）
+
+不是只修下半脸，而是把**整张生成脸**交给 GFPGAN 修到 512²，再整脸贴回，最后整帧柔化：
+
+```bash
+GABTWIN_AVATAR_UNIFORM=1 GABTWIN_AVATAR_RESTORE=all GABTWIN_AVATAR_SOFTEN=1.2 ./scripts/avatar-sidecar-start.sh
+```
+
+- 眼睛、鼻子、嘴、脸颊都来自同一张修复脸，不再有“嘴清楚、眼睛另一种质感”；
+- 30 帧预览约 **28 s**（约 1 fps），实时同样要等；
+- 脸会明显“美颜/年轻化”，身份有漂移；GFPGAN 的 `weight` 默认 0.7，
+  可降到 0.4–0.5 换回一点原貌（嘴仍比纯 MuseTalk 清楚）；
+- 这是“一致性 + 细节”的本地折中，不是实时方案。
