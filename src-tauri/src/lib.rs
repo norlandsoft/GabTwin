@@ -1523,6 +1523,22 @@ fn interrupt(app: AppHandle) {
     log("手动打断：停止 TTS 并取消回复");
 }
 
+/// 照片级预览的音频不走 WebView（WKWebView 会拦自动播放/混合内容），
+/// 直接用系统 afplay 播固定的 3 秒样音，UI 按自己的时钟取帧。
+#[tauri::command]
+fn avatar_play_preview() -> Result<(), String> {
+    let path = gabtwin_home().join("avatar/preview.wav");
+    if !path.is_file() {
+        return Err(format!("缺少预览音频：{}", path.display()));
+    }
+    std::process::Command::new("/usr/bin/afplay")
+        .arg(&path)
+        .spawn()
+        .map_err(|err| format!("afplay 启动失败：{err}"))?;
+    log(format!("照片级预览音频：{}", path.display()));
+    Ok(())
+}
+
 #[tauri::command]
 fn tts_info(state: tauri::State<TtsState>) -> serde_json::Value {
     let (engine, detail) = state.label.lock().unwrap().clone();
@@ -1563,6 +1579,7 @@ pub fn run() {
             replay_sample,
             app_info,
             tts_info,
+            avatar_play_preview,
             interrupt,
             clear_memory,
             get_persona,

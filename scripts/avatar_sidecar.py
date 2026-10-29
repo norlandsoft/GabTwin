@@ -90,7 +90,7 @@ def prepare(frames_dir: Path) -> None:
     for i, fr in enumerate(FRAMES):
         t = 9.0 + i / 25.0
         x, y, bw, bh = box_at(t)
-        s = int(max(bw, bh) * 1.42)
+        s = int(max(bw, bh) * 1.20)
         cx, cy = x + bw / 2, y + bh / 2
         x0 = max(0, min(w - s, int(round(cx - s / 2))))
         y0 = max(0, min(h - s, int(round(cy - s / 2))))
@@ -113,10 +113,19 @@ def prepare(frames_dir: Path) -> None:
 def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.ndarray:
     x0, y0, s = box
     gen = cv2.resize(face, (s, s), interpolation=cv2.INTER_LANCZOS4)
-    border = max(16, min(40, s // 10))
+    # 轻度锐化，抵消 256² VAE 的柔化；只作用在下半脸。
+    blur = cv2.GaussianBlur(gen, (0, 0), 1.0)
+    gen = cv2.addWeighted(gen, 1.55, blur, -0.55, 0)
+    # 只替换下半脸（嘴/下巴/下颌），保留源视频里更锐的眼睛、鼻子和脸颊。
+    # 整块贴回会把整个脸换成生成图，眼睛也会一起变糊——这是之前“嘴和脸都糊”的主因。
     mask = np.zeros((s, s), np.float32)
-    mask[border:s - border, border:s - border] = 1.0
-    mask = cv2.GaussianBlur(mask, (0, 0), border * 0.55)[..., None]
+    cv2.ellipse(
+        mask,
+        (int(s * 0.50), int(s * 0.68)),
+        (int(s * 0.32), int(s * 0.21)),
+        0, 0, 360, 1.0, -1,
+    )
+    mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
     region = frame[y0:y0 + s, x0:x0 + s].astype(np.float32)
     out = frame.copy()
     out[y0:y0 + s, x0:x0 + s] = np.clip(gen.astype(np.float32) * mask + region * (1 - mask), 0, 255).astype(np.uint8)
@@ -132,7 +141,7 @@ def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) 
     fx = (OUT_W - fw) // 2
     fg = cv2.resize(src, (fw, fh), interpolation=cv2.INTER_LANCZOS4)
     wide[:, fx:fx + fw] = fg
-    ok, buf = cv2.imencode(".jpg", wide, [cv2.IMWRITE_JPEG_QUALITY, 86])
+    ok, buf = cv2.imencode(".jpg", wide, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buf.tobytes() if ok else None
 
 

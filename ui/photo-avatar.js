@@ -14,6 +14,8 @@
     audio: null,
     raf: 0,
     lastIndex: -1,
+    clockMode: false,
+    clockStart: 0,
     started: false,
     done: false,
     retry: 0,
@@ -43,6 +45,7 @@
   function stopPlayback({ restore = false } = {}) {
     state.playing = false;
     state.started = false;
+    state.clockMode = false;
     if (state.raf) cancelAnimationFrame(state.raf);
     state.raf = 0;
     if (state.audio) {
@@ -63,10 +66,14 @@
   }
 
   function tick() {
-    if (!state.playing || !state.audio) return;
-    const raw = Math.floor(state.audio.currentTime * state.fps);
+    if (!state.playing) return;
+    const pos = state.clockMode
+      ? (performance.now() - state.clockStart) / 1000
+      : (state.audio ? state.audio.currentTime : 0);
+    const raw = Math.floor(pos * state.fps);
     showFrame(raw);
-    if (state.audio.ended) {
+    const total = ((state.clause && state.clause.count) || state.frames.length) / state.fps;
+    if (pos >= total || (!state.clockMode && state.audio && state.audio.ended)) {
       state.playing = false;
       status("预览结束");
       return;
@@ -79,9 +86,29 @@
     stopPlayback();
     setMode(true);
     showFrame(0);
+    // 优先用 Rust 的 afplay：WKWebView 对 HTTP 音频/自动播放限制多。
+    const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    if (invoke) {
+      try {
+        await invoke("avatar_play_preview");
+        state.audio = null;
+        state.clockMode = true;
+        state.clockStart = performance.now();
+        state.started = true;
+        state.playing = true;
+        state.lastIndex = -1;
+        showFrame(0);
+        status("播放样片");
+        state.raf = requestAnimationFrame(tick);
+        return;
+      } catch (err) {
+        console.warn("[photo] afplay failed, fallback to <audio>", err);
+      }
+    }
     const audio = new Audio(state.audioUrl);
     audio.preload = "auto";
     state.audio = audio;
+    state.clockMode = false;
     state.started = true;
     state.playing = true;
     state.lastIndex = -1;
@@ -98,7 +125,9 @@
   }
 
   function maybeStart() {
-    if (state.audioUrl && !state.started && state.frames.length >= 3) {
+    // 预览：等 sidecar 把整段帧生成完再播，保证嘴动是连续的；
+    // 实时 TTS 才需要边到边播。
+    if (state.audioUrl && state.done && !state.started && state.frames.length >= 3) {
       startAudio();
     }
   }
@@ -113,6 +142,13 @@
       }
       if (msg.type === "ready") {
         state.connected = true;
+        // sidecar 重启后，旧帧/旧音频已经过期，清掉缓存，避免重播上一版画面。
+        stopPlayback();
+        clearFrames();
+        state.clause = null;
+        state.audioUrl = null;
+        state.done = false;
+        state.started = false;
         const btn = button();
         if (btn) {
           btn.hidden = false;
@@ -231,6 +267,16 @@
   function init() {
     const btn = button();
     if (btn) btn.addEventListener("click", preview);
+    window.addEventListener("keydown", (e) => {
+      const el = document.activeElement;
+      const typing =
+        el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === "KeyP") {
+        e.preventDefault();
+        preview();
+      }
+    });
     connect();
   }
 
