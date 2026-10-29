@@ -373,6 +373,7 @@ function initAvatar() {
 }
 
 initAvatar();
+window.GabTwinPhoto?.init();
 
 if (!invoke) {
   hint.textContent = "Tauri API 未注入：请用 GabTwin 应用打开，而不是浏览器。";
@@ -456,6 +457,7 @@ if (!invoke) {
     if (!invoke || pttHeld) return;
     pttHeld = true;
     setPttLabel("正在听…松开空格发送");
+    window.GabTwinPhoto?.stop();
     setAvatarState("listening");
     invoke("ptt_press").catch(() => {});
   });
@@ -519,6 +521,7 @@ if (!invoke) {
   });
 
   $("start").addEventListener("click", () => {
+    window.GabTwinPhoto?.stop();
     clearAll();
     setStatus("loading");
     guard(invoke("start_listening"));

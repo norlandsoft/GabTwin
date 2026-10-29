@@ -24,6 +24,7 @@
         <section class="avatar-stage" id="avatarStage" aria-label="数字人">
           <div class="avatar-glow"></div>
           <canvas id="avatarCanvas"></canvas>
+          <img id="avatarPhoto" alt="" />
           <div class="avatar-caption">
             <span class="avatar-name">园园</span>
             <span class="avatar-mood" id="avatarMood">在这里</span>
@@ -51,6 +52,7 @@
             <button id="stop" disabled>停止</button>
             <button id="sample" class="ghost">示例音频</button>
             <button id="clearMemory" class="ghost">清空记忆</button>
+            <button id="photoPreview" class="ghost" hidden>照片级预览</button>
             <button id="settings" class="ghost">设置</button>
           </div>
         </div>
@@ -78,6 +80,7 @@
       </div>
     </div>
     <script src="vendor/avatar.js"></script>
+    <script src="photo-avatar.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

@@ -195,6 +195,8 @@ M1 Max 的 24 核 GPU 比 M5 Max 弱不少；下面所有 fps 都是**待实测�
   或做 Core ML/ANE 优化。** 128² 的 15 fps 是「流畅但糊」，不适合照片级。
 - 后台有其他 GPU 消费者（Chrome、Spotlight 索引等）时数字会掉一半；正式验收要清场复测。
 - 本机样本：`workspace/avatar/sample-3s.mp4`（1280×720，宽幅 + 模糊填充；仅本地自用）。
+- 应用内预览：`scripts/avatar-sidecar-start.sh` 启动 sidecar，应用底部「照片级预览」按钮
+  用固定 3 秒样音播放 10 fps 画面。**实时 TTS 流式推理还没接**，这是下一步。
 
 ### 画质边界
 
