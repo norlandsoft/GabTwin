@@ -21,7 +21,12 @@
       </header>
 
       <main class="stage" id="stage">
-        <section class="avatar-stage" id="avatarStage" aria-label="数字人">
+        <section class="chat-panel" id="transcript">
+          <div class="hint" id="hint">按「开始聆听」，然后说话。它会在你说完后接话。</div>
+          <div class="conversation" id="conversation"></div>
+          <div class="live" id="live"></div>
+        </section>
+        <aside class="avatar-stage" id="avatarStage" aria-label="数字人">
           <div class="avatar-glow"></div>
           <canvas id="avatarCanvas"></canvas>
           <img id="avatarPhoto" alt="" />
@@ -29,12 +34,7 @@
             <span class="avatar-name">园园</span>
             <span class="avatar-mood" id="avatarMood">在这里</span>
           </div>
-        </section>
-        <div class="transcript" id="transcript">
-          <div class="hint" id="hint">按「开始聆听」，然后说话。它会在你说完后接话。</div>
-          <div class="conversation" id="conversation"></div>
-          <div class="live" id="live"></div>
-        </div>
+        </aside>
       </main>
 
       <footer class="dock">

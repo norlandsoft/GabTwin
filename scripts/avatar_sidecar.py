@@ -36,7 +36,7 @@ from musetalk_mlx.pipeline_mlx import MuseTalkPipeline  # noqa: E402
 import mlx.core as mx  # noqa: E402
 
 FPS = 10
-OUT_W, OUT_H = 1280, 720
+OUT_W, OUT_H = 540, 720
 FACE = 256
 
 # Vision 在 9.0–12.0 s 每 0.5 s 检出的 (t, x, y, w, h)；与样片脚本一致。
@@ -56,7 +56,6 @@ PIPE: MuseTalkPipeline | None = None
 FRAMES: list[np.ndarray] = []
 LATENTS: list = []
 BOXES_PER_FRAME: list[tuple[int, int, int]] = []
-BG: np.ndarray | None = None
 PREVIEW_WAV: Path | None = None
 
 
@@ -76,7 +75,7 @@ def box_at(t: float) -> tuple[float, float, float, float]:
 
 
 def prepare(frames_dir: Path) -> None:
-    global FRAMES, LATENTS, BOXES_PER_FRAME, BG, PIPE
+    global FRAMES, LATENTS, BOXES_PER_FRAME, PIPE
     files = sorted(frames_dir.glob("*.png"))
     if not files:
         raise SystemExit(f"no frames in {frames_dir}")
@@ -99,15 +98,8 @@ def prepare(frames_dir: Path) -> None:
         BOXES_PER_FRAME.append((x0, y0, s))
     print(f"precomputed {len(LATENTS)} latents in {time.time()-t0:.1f}s", flush=True)
 
-    # 静态模糊背景 + 前景位置：宽幅 + 模糊填充
-    sc = max(OUT_W / w, OUT_H / h)
-    rw, rh = int(w * sc + 0.5), int(h * sc + 0.5)
-    bg = cv2.resize(FRAMES[0], (rw, rh))
-    bx, by = (rw - OUT_W) // 2, (rh - OUT_H) // 2
-    bg = bg[by:by + OUT_H, bx:bx + OUT_W]
-    bg = cv2.GaussianBlur(bg, (0, 0), 26)
-    BG = (bg * 0.55).astype(np.uint8)
-    print("background ready", flush=True)
+    # 3:4 竖屏：源视频本身就是 3:4，直接缩放，不做模糊填充。
+    print("portrait 3:4 ready", flush=True)
 
 
 def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.ndarray:
@@ -133,15 +125,9 @@ def paste(frame: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> np.
 
 
 def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) -> bytes | None:
-    assert BG is not None
     src = paste(src, face, box)
-    wide = BG.copy()
-    fh = OUT_H
-    fw = int(round(src.shape[1] * fh / src.shape[0]))
-    fx = (OUT_W - fw) // 2
-    fg = cv2.resize(src, (fw, fh), interpolation=cv2.INTER_LANCZOS4)
-    wide[:, fx:fx + fw] = fg
-    ok, buf = cv2.imencode(".jpg", wide, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    portrait = cv2.resize(src, (OUT_W, OUT_H), interpolation=cv2.INTER_LANCZOS4)
+    ok, buf = cv2.imencode(".jpg", portrait, [cv2.IMWRITE_JPEG_QUALITY, 95])
     return buf.tobytes() if ok else None
 
 
