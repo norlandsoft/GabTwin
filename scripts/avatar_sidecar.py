@@ -39,11 +39,11 @@ from musetalk_mlx.pipeline_mlx import MuseTalkPipeline  # noqa: E402
 import mlx.core as mx  # noqa: E402
 
 FPS = 10
-OUT_W, OUT_H = 432, 576
+OUT_W, OUT_H = 360, 480
 FACE = 256
 # 统一清晰度模式：整张脸一起贴回，再对整帧做同样的柔化；默认开启。
 UNIFORM = os.environ.get("GABTWIN_AVATAR_UNIFORM", "1").strip().lower() not in ("0", "off", "false", "no")
-SOFTEN = float(os.environ.get("GABTWIN_AVATAR_SOFTEN", "1.35"))
+SOFTEN = float(os.environ.get("GABTWIN_AVATAR_SOFTEN", "3.0"))
 RESTORE_MODE = os.environ.get("GABTWIN_AVATAR_RESTORE", "0").strip().lower()
 RESTORE_PREVIEW = RESTORE_MODE in ("1", "all", "preview", "true", "yes")
 RESTORE_ALL = RESTORE_MODE in ("1", "all", "true", "yes")
@@ -150,15 +150,16 @@ def compose_frame(src: np.ndarray, face: np.ndarray, box: tuple[int, int, int]) 
     y0 = max(0, min(OUT_H - 1, int(round(y0 * scale))))
     s = max(8, min(min(OUT_W - x0, OUT_H - y0), int(round(s * scale))))
     portrait = paste(portrait, face, (x0, y0, s))
-    # 输出分辨率下做一次轻度锐化，只动下半脸，避免全图发硬。
-    roi = portrait[y0:y0 + s, x0:x0 + s]
-    if roi.size:
-        blur = cv2.GaussianBlur(roi, (0, 0), 1.0)
-        sharp = cv2.addWeighted(roi, 1.35, blur, -0.35, 0)
-        mask = np.zeros((s, s), np.float32)
-        cv2.ellipse(mask, (int(s * 0.50), int(s * 0.68)), (int(s * 0.32), int(s * 0.21)), 0, 0, 360, 1.0, -1)
-        mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
-        portrait[y0:y0 + s, x0:x0 + s] = np.clip(sharp * mask + roi * (1 - mask), 0, 255).astype(np.uint8)
+    # 质量模式才做下半脸锐化；统一模式必须整张脸同一种处理，否则嘴又会被单独拉锐。
+    if not UNIFORM:
+        roi = portrait[y0:y0 + s, x0:x0 + s]
+        if roi.size:
+            blur = cv2.GaussianBlur(roi, (0, 0), 1.0)
+            sharp = cv2.addWeighted(roi, 1.35, blur, -0.35, 0)
+            mask = np.zeros((s, s), np.float32)
+            cv2.ellipse(mask, (int(s * 0.50), int(s * 0.68)), (int(s * 0.32), int(s * 0.21)), 0, 0, 360, 1.0, -1)
+            mask = cv2.GaussianBlur(mask, (0, 0), max(6.0, s * 0.04))[..., None]
+            portrait[y0:y0 + s, x0:x0 + s] = np.clip(sharp * mask + roi * (1 - mask), 0, 255).astype(np.uint8)
     if UNIFORM and SOFTEN > 0:
         # 整帧同一层柔化：源视频的清晰脸和生成的下半脸被拉到同一清晰度。
         portrait = cv2.GaussianBlur(portrait, (0, 0), SOFTEN)
