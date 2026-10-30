@@ -12,7 +12,13 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import librosa
 import numpy as np
+
+try:
+    import psola
+except Exception:  # noqa: BLE001
+    psola = None
 import soundfile as sf
 from mlx_audio.tts import load_model
 
@@ -34,6 +40,12 @@ CFG_SCALE = float(_cfg) if _cfg else None
 _seed = os.environ.get("GABTWIN_BREEZE_SEED", "").strip()
 SEED = int(_seed) if _seed else None
 AGC_ON = os.environ.get("GABTWIN_BREEZE_AGC", "0") != "0"
+# 音调区间限制：把每句的中位 F0 拉回目标附近，避免突然高涨/低落。
+PITCH_LIMIT = os.environ.get("GABTWIN_BREEZE_PITCH", "1") != "0"
+PITCH_TARGET = float(os.environ.get("GABTWIN_BREEZE_PITCH_TARGET", "220"))
+PITCH_MAX_SHIFT = float(os.environ.get("GABTWIN_BREEZE_PITCH_MAX_SHIFT", "4.0"))
+PITCH_RANGE = float(os.environ.get("GABTWIN_BREEZE_PITCH_RANGE", "3.0"))
+PITCH_COMPRESS = float(os.environ.get("GABTWIN_BREEZE_PITCH_COMPRESS", "0.65"))
 
 
 class AGC:
@@ -60,6 +72,97 @@ class AGC:
         if peak > 0.95:
             out = out * (0.95 / peak)
         return out.astype(np.float32)
+
+
+def limit_pitch(audio: np.ndarray, rate: int) -> np.ndarray:
+    """限制一句话的 F0 中位和上下区间，不改时长。
+
+    用 librosa 估 F0 轮廓，再用 Praat PSOLA（psola.vocode）按目标轮廓重合成：
+    中位拉向目标，偏离按 PITCH_COMPRESS 压窄，最后夹在 ±PITCH_RANGE 个半音内。
+    保留共振峰，避免“卡通音”。
+    """
+    if not PITCH_LIMIT or audio.size < int(rate * 0.35):
+        return audio
+    if psola is None:
+        print("[pitch] psola 未安装，跳过", flush=True)
+        return audio
+    try:
+        hop = 240  # 10 ms
+        f0, _, _ = librosa.pyin(
+            audio.astype(np.float32),
+            fmin=70,
+            fmax=400,
+            sr=rate,
+            frame_length=1024,
+            hop_length=hop,
+        )
+        voiced = f0[np.isfinite(f0) & (f0 > 0)]
+        if voiced.size < 8:
+            return audio
+        median = float(np.median(voiced))
+        shift = 12.0 * math.log2(PITCH_TARGET / median)
+        shift = max(-PITCH_MAX_SHIFT, min(PITCH_MAX_SHIFT, shift))
+        target = median * (2.0 ** (shift / 12.0))
+        # 句内偏离按比例压缩，再限制在目标 ±PITCH_RANGE 半音。
+        contour = np.where(
+            np.isfinite(f0) & (f0 > 0),
+            target * np.power(f0 / median, PITCH_COMPRESS),
+            np.nan,
+        )
+        lo = target * (2.0 ** (-PITCH_RANGE / 12.0))
+        hi = target * (2.0 ** (PITCH_RANGE / 12.0))
+        contour = np.clip(contour, lo, hi)
+        # 把 10 ms 的 F0 帧插值到与音频等长的 100 Hz 目标轮廓。
+        duration = audio.size / rate
+        n = max(2, int(round(duration * 100)) + 1)
+        src_t = np.arange(contour.size) * hop / rate
+        dst_t = np.linspace(0.0, duration, n)
+        mapped = np.interp(dst_t, src_t, np.nan_to_num(contour, nan=0.0))
+        mapped[mapped < 1.0] = np.nan
+        out = psola.vocode(
+            audio.astype(np.float32),
+            rate,
+            target_pitch=mapped,
+            fmin=70,
+            fmax=400,
+        )
+        shifted = np.asarray(out, dtype=np.float32).reshape(-1)
+        if shifted.size < audio.size:
+            shifted = np.pad(shifted, (0, audio.size - shifted.size))
+        elif shifted.size > audio.size:
+            shifted = shifted[: audio.size]
+        print(
+            f"[pitch] median {median:.1f} -> {target:.1f} Hz "
+            f"({shift:+.2f} st), range ±{PITCH_RANGE:.1f} st",
+            flush=True,
+        )
+        return shifted
+    except Exception as error:  # noqa: BLE001
+        print(f"[pitch] PSOLA skipped: {error}", flush=True)
+    # 兜底：整句常量移调（至少把中位拉回；不压区间）。
+    try:
+        y16 = librosa.resample(audio.astype(np.float32), orig_sr=rate, target_sr=16000)
+        f0 = librosa.yin(y16, fmin=70, fmax=400, sr=16000, frame_length=1024, hop_length=160)
+        voiced = f0[np.isfinite(f0) & (f0 > 0)]
+        if voiced.size < 8:
+            return audio
+        median = float(np.median(voiced))
+        semitones = 12.0 * math.log2(PITCH_TARGET / median)
+        semitones = max(-PITCH_MAX_SHIFT, min(PITCH_MAX_SHIFT, semitones))
+        if abs(semitones) < 0.15:
+            return audio
+        shifted = librosa.effects.pitch_shift(
+            audio.astype(np.float32), sr=rate, n_steps=semitones, res_type="soxr_hq"
+        )
+        if shifted.size < audio.size:
+            shifted = np.pad(shifted, (0, audio.size - shifted.size))
+        elif shifted.size > audio.size:
+            shifted = shifted[: audio.size]
+        print(f"[pitch] fallback median {median:.1f} Hz {semitones:+.2f} st", flush=True)
+        return shifted.astype(np.float32)
+    except Exception as error:  # noqa: BLE001
+        print(f"[pitch] skipped: {error}", flush=True)
+        return audio
 
 
 def generate_kwargs(text: str, interval: float) -> dict:
@@ -127,6 +230,7 @@ def synth(text: str) -> bytes:
             audio = np.concatenate([
                 agc.process(audio[i:i + block]) for i in range(0, len(audio), block)
             ])
+        audio = limit_pitch(audio, rate)
     buffer = io.BytesIO()
     sf.write(buffer, audio, rate, format="WAV", subtype="PCM_16")
     return buffer.getvalue()
@@ -156,28 +260,38 @@ class Handler(BaseHTTPRequestHandler):
                 return
             REQUEST_ID += 1
             my_id = REQUEST_ID
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/L16; rate=24000")
-            self.send_header("X-Sample-Rate", "24000")
-            self.send_header("Transfer-Encoding", "chunked")
-            self.end_headers()
-            agc = AGC() if AGC_ON else None
+            # 要限制音调，就得先拿到整句；先合成完，再分块回放。
+            chunks = []
+            rate = SAMPLE_RATE
             with LOCK:
                 for result in MODEL.generate(**generate_kwargs(text, 0.25)):
                     if my_id != REQUEST_ID:
                         print("[tts] stream cancelled by newer request", flush=True)
                         break
-                    audio = np.array(result.audio, dtype=np.float32)
-                    if agc is not None:
-                        audio = agc.process(audio)
-                    else:
-                        audio = np.clip(audio * 2.2, -1.0, 1.0)
-                    pcm = (audio * 32767.0).astype("<i2").tobytes()
-                    if pcm:
-                        self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
-                        self.wfile.write(pcm)
-                        self.wfile.write(b"\r\n")
-                        self.wfile.flush()
+                    chunks.append(np.array(result.audio, dtype=np.float32))
+                    rate = getattr(result, "sample_rate", rate)
+            audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+            if AGC_ON and audio.size:
+                agc = AGC()
+                block = max(1, int(rate * 0.25))
+                audio = np.concatenate([
+                    agc.process(audio[i:i + block]) for i in range(0, len(audio), block)
+                ])
+            audio = limit_pitch(audio, rate)
+            audio = np.clip(audio * 2.2, -1.0, 1.0)
+            pcm_all = (audio * 32767.0).astype("<i2").tobytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/L16; rate=24000")
+            self.send_header("X-Sample-Rate", "24000")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            chunk_bytes = max(2, int(rate * 0.25) * 2)
+            for start in range(0, len(pcm_all), chunk_bytes):
+                pcm = pcm_all[start:start + chunk_bytes]
+                self.wfile.write(f"{len(pcm):X}\r\n".encode("ascii"))
+                self.wfile.write(pcm)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
