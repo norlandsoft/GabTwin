@@ -23,6 +23,7 @@ Breeze TTS 2（本地 4-bit）出声；戴耳机可直接插话。**不再包含
 | [dev/02 ASR 模型对照](docs/dev/02-asr-model-compare.md) | 大模型 vs small-CTC：CER、首字延迟、RTF |
 | [dev/03 LLM 接话](docs/dev/03-llm.md) | 句末触发、SSE 流式、取消、上下文预算、mock 验证 |
 | [dev/04 TTS](docs/dev/04-tts.md) | 句级流式合成、VITS 模型、半双工、实测延迟 |
+| [dev/05 OmniVoice 评估](docs/dev/05-omnivoice-eval.md) | M1 Max 实测、许可、与 Breeze 的取舍 |
 
 ## 现在能跑
 
